@@ -16,21 +16,21 @@
         {
           "stepIndex": 2,
           "type": "fill",
-          "playwrightCode": "await page.getByPlaceholder('Nhập tên đăng nhập').fill('admin');",
+          "playwrightCode": "await page.getByPlaceholder('Nhập tên đăng nhập').or(page.getByLabel('Nhập tên đăng nhập')).first().fill('admin');",
           "description": "- Nhập 'admin' vào ô 'Nhập tên đăng nhập'",
           "confidence": "low"
         },
         {
           "stepIndex": 3,
           "type": "fill",
-          "playwrightCode": "await page.getByPlaceholder('Nhập mật khẩu').fill('123123');",
+          "playwrightCode": "await page.getByPlaceholder('Nhập mật khẩu').or(page.getByLabel('Nhập mật khẩu')).first().fill('123123');",
           "description": "- Nhập '123123' vào ô 'Nhập mật khẩu'",
           "confidence": "low"
         },
         {
           "stepIndex": 4,
           "type": "click",
-          "playwrightCode": "await page.getByText('Đăng nhập').click();",
+          "playwrightCode": "await page.getByRole('button', { name: 'Đăng nhập' }).or(page.getByText('Đăng nhập')).first().click();",
           "description": "- Bấm nút 'Đăng nhập'",
           "confidence": "low"
         },
@@ -59,21 +59,21 @@
         {
           "stepIndex": 2,
           "type": "fill",
-          "playwrightCode": "await page.getByPlaceholder('Nhập tên đăng nhập').fill('admin');",
+          "playwrightCode": "await page.getByPlaceholder('Nhập tên đăng nhập').or(page.getByLabel('Nhập tên đăng nhập')).first().fill('admin');",
           "description": "- Nhập 'admin' vào ô 'Nhập tên đăng nhập'",
           "confidence": "low"
         },
         {
           "stepIndex": 3,
           "type": "fill",
-          "playwrightCode": "await page.getByPlaceholder('Nhập mật khẩu').fill('1231234');",
+          "playwrightCode": "await page.getByPlaceholder('Nhập mật khẩu').or(page.getByLabel('Nhập mật khẩu')).first().fill('1231234');",
           "description": "- Nhập '1231234' vào ô 'Nhập mật khẩu'",
           "confidence": "low"
         },
         {
           "stepIndex": 4,
           "type": "click",
-          "playwrightCode": "await page.getByText('Đăng nhập').click();",
+          "playwrightCode": "await page.getByRole('button', { name: 'Đăng nhập' }).or(page.getByText('Đăng nhập')).first().click();",
           "description": "- Bấm nút 'Đăng nhập'",
           "confidence": "low"
         },
@@ -102,21 +102,21 @@
         {
           "stepIndex": 2,
           "type": "fill",
-          "playwrightCode": "await page.getByPlaceholder('Nhập tên đăng nhập').fill('admin123');",
+          "playwrightCode": "await page.getByPlaceholder('Nhập tên đăng nhập').or(page.getByLabel('Nhập tên đăng nhập')).first().fill('admin123');",
           "description": "- Nhập 'admin123' vào ô 'Nhập tên đăng nhập'",
           "confidence": "low"
         },
         {
           "stepIndex": 3,
           "type": "fill",
-          "playwrightCode": "await page.getByPlaceholder('Nhập mật khẩu').fill('123123');",
+          "playwrightCode": "await page.getByPlaceholder('Nhập mật khẩu').or(page.getByLabel('Nhập mật khẩu')).first().fill('123123');",
           "description": "- Nhập '123123' vào ô 'Nhập mật khẩu'",
           "confidence": "low"
         },
         {
           "stepIndex": 4,
           "type": "click",
-          "playwrightCode": "await page.getByText('Đăng nhập').click();",
+          "playwrightCode": "await page.getByRole('button', { name: 'Đăng nhập' }).or(page.getByText('Đăng nhập')).first().click();",
           "description": "- Bấm nút 'Đăng nhập'",
           "confidence": "low"
         },
@@ -145,14 +145,14 @@
         {
           "stepIndex": 2,
           "type": "fill",
-          "playwrightCode": "await page.getByPlaceholder('Nhập tên đăng nhập').fill('admin');",
+          "playwrightCode": "await page.getByPlaceholder('Nhập tên đăng nhập').or(page.getByLabel('Nhập tên đăng nhập')).first().fill('admin');",
           "description": "- Nhập 'admin' vào ô 'Nhập tên đăng nhập'",
           "confidence": "low"
         },
         {
           "stepIndex": 3,
           "type": "click",
-          "playwrightCode": "await page.getByText('Đăng nhập').click();",
+          "playwrightCode": "await page.getByRole('button', { name: 'Đăng nhập' }).or(page.getByText('Đăng nhập')).first().click();",
           "description": "- Bấm nút 'Đăng nhập'",
           "confidence": "low"
         },
@@ -181,14 +181,14 @@
         {
           "stepIndex": 2,
           "type": "fill",
-          "playwrightCode": "await page.getByPlaceholder('Nhập mật khẩu').fill('123123');",
+          "playwrightCode": "await page.getByPlaceholder('Nhập mật khẩu').or(page.getByLabel('Nhập mật khẩu')).first().fill('123123');",
           "description": "- Nhập '123123' vào ô 'Nhập mật khẩu'",
           "confidence": "low"
         },
         {
           "stepIndex": 3,
           "type": "click",
-          "playwrightCode": "await page.getByText('Đăng nhập').click();",
+          "playwrightCode": "await page.getByRole('button', { name: 'Đăng nhập' }).or(page.getByText('Đăng nhập')).first().click();",
           "description": "- Bấm nút 'Đăng nhập'",
           "confidence": "low"
         },
@@ -217,21 +217,21 @@
         {
           "stepIndex": 2,
           "type": "fill",
-          "playwrightCode": "await page.getByPlaceholder('Nhập tên đăng nhập').fill('Admin');",
+          "playwrightCode": "await page.getByPlaceholder('Nhập tên đăng nhập').or(page.getByLabel('Nhập tên đăng nhập')).first().fill('Admin');",
           "description": "- Nhập 'Admin' vào ô 'Nhập tên đăng nhập'",
           "confidence": "low"
         },
         {
           "stepIndex": 3,
           "type": "fill",
-          "playwrightCode": "await page.getByPlaceholder('Nhập mật khẩu').fill('123123');",
+          "playwrightCode": "await page.getByPlaceholder('Nhập mật khẩu').or(page.getByLabel('Nhập mật khẩu')).first().fill('123123');",
           "description": "- Nhập '123123' vào ô 'Nhập mật khẩu'",
           "confidence": "low"
         },
         {
           "stepIndex": 4,
           "type": "click",
-          "playwrightCode": "await page.getByText('Đăng nhập').click();",
+          "playwrightCode": "await page.getByRole('button', { name: 'Đăng nhập' }).or(page.getByText('Đăng nhập')).first().click();",
           "description": "- Bấm nút 'Đăng nhập'",
           "confidence": "low"
         },
@@ -260,7 +260,7 @@
         {
           "stepIndex": 2,
           "type": "click",
-          "playwrightCode": "await page.getByText('Đăng nhập').click();",
+          "playwrightCode": "await page.getByRole('button', { name: 'Đăng nhập' }).or(page.getByText('Đăng nhập')).first().click();",
           "description": "- Bấm nút 'Đăng nhập'",
           "confidence": "low"
         },
@@ -289,7 +289,7 @@
         {
           "stepIndex": 2,
           "type": "fill",
-          "playwrightCode": "await page.getByPlaceholder('Nhập mật khẩu').fill('123123');",
+          "playwrightCode": "await page.getByPlaceholder('Nhập mật khẩu').or(page.getByLabel('Nhập mật khẩu')).first().fill('123123');",
           "description": "- Nhập '123123' vào ô 'Nhập mật khẩu' (mặc định hiển thị dạng chấm tròn ••••••)",
           "confidence": "low"
         },
@@ -339,21 +339,21 @@
         {
           "stepIndex": 2,
           "type": "fill",
-          "playwrightCode": "await page.getByPlaceholder('Nhập tên đăng nhập').fill(' admin ');",
+          "playwrightCode": "await page.getByPlaceholder('Nhập tên đăng nhập').or(page.getByLabel('Nhập tên đăng nhập')).first().fill(' admin ');",
           "description": "- Nhập ' admin ' vào ô 'Nhập tên đăng nhập'",
           "confidence": "low"
         },
         {
           "stepIndex": 3,
           "type": "fill",
-          "playwrightCode": "await page.getByPlaceholder('Nhập mật khẩu').fill('123123');",
+          "playwrightCode": "await page.getByPlaceholder('Nhập mật khẩu').or(page.getByLabel('Nhập mật khẩu')).first().fill('123123');",
           "description": "- Nhập '123123' vào ô 'Nhập mật khẩu'",
           "confidence": "low"
         },
         {
           "stepIndex": 4,
           "type": "click",
-          "playwrightCode": "await page.getByText('Đăng nhập').click();",
+          "playwrightCode": "await page.getByRole('button', { name: 'Đăng nhập' }).or(page.getByText('Đăng nhập')).first().click();",
           "description": "- Bấm nút 'Đăng nhập'",
           "confidence": "low"
         },
@@ -382,7 +382,7 @@
         {
           "stepIndex": 2,
           "type": "click",
-          "playwrightCode": "await page.getByText('Đăng nhập').click();",
+          "playwrightCode": "await page.getByRole('button', { name: 'Đăng nhập' }).or(page.getByText('Đăng nhập')).first().click();",
           "description": "- Bấm nút 'Đăng nhập'",
           "confidence": "low"
         },

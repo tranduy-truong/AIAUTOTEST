@@ -126,86 +126,66 @@ Vi du:
       },
     ]);
 
-    // === PIPELINE MOI: Step Parser -> Live Runner -> Action Plan -> Generator ===
-
-    // Buoc 1: Parse kich ban thanh JSON
-    console.log("\n[Pipeline] Buoc 1/4: Dang phan tich kich ban...");
-    const parsedCases = parseScript(scriptContent);
-    console.log(`   Tim thay ${parsedCases.length} test case(s)`);
-    for (const tc of parsedCases) {
-      console.log(`   - ${tc.id}: ${tc.name} (${tc.steps.length} buoc)`);
-    }
-
-    if (parsedCases.length === 0) {
-      console.log("\nKhong tim thay test case nao trong kich ban. Vui long kiem tra lai.");
-      await returnToMenu();
-      return;
-    }
-
-    // Buoc 2: Live Runner - chay tung buoc trong browser that, chup DOM
-    console.log("\n[Pipeline] Buoc 2/4: Dang chay browser va chup DOM tung trang thai...");
-    let snapshotsMap;
+    // === CRAWLER: Live Multi-State Crawler (vấn đáp DOM nhiều lần theo từng trạng thái) ===
+    let crawledDomSection = "";
+    console.log("\n[Crawler Agent] Dang khoi chay Live Crawler de van dap DOM theo tung trang thai...");
     try {
-      snapshotsMap = await runLive(parsedCases);
+      const parsedCases = parseScript(scriptContent);
+      const snapshotsMap = await runLive(parsedCases);
+
+      let domReport = "# Multi-State Crawled DOM Data\n\n";
       let totalSnapshots = 0;
-      for (const [, snapshots] of snapshotsMap) {
-        totalSnapshots += snapshots.length;
+      for (const [tcId, snapshots] of snapshotsMap) {
+        domReport += `## ${tcId} DOM Snapshots\n\n`;
+        for (const snap of snapshots) {
+          totalSnapshots++;
+          domReport += `### State: ${snap.afterStep} (URL: ${snap.url})\n`;
+          domReport += `| Tag | Type | Role | Name | Placeholder | Label | Text |\n`;
+          domReport += `| --- | ---- | ---- | ---- | ----------- | ----- | ---- |\n`;
+          snap.elements.forEach(el => {
+            if (el.isVisible) {
+              domReport += `| ${el.tag} | ${el.type || ''} | ${el.role || ''} | ${el.name || ''} | ${el.placeholder || ''} | ${el.ariaLabel || ''} | ${el.text ? el.text.slice(0, 50) : ''} |\n`;
+            }
+          });
+          domReport += "\n";
+        }
       }
-      console.log(`   Da chup ${totalSnapshots} DOM snapshot(s)`);
+
+      if (!fs.existsSync("artifacts")) fs.mkdirSync("artifacts");
+      fs.writeFileSync("artifacts/crawled-dom.md", domReport);
+      console.log(`   Da van dap va thu thap ${totalSnapshots} DOM snapshot(s) theo tung trang thai.`);
+      crawledDomSection = `\n\n[DU LIEU DOM THUC TE DA CRAWL THEO TUNG TRANG THAI NGHIEP VU]\nKhi buoc test mo ta phan tu, hay TRA CUU DOM ben duoi de tim selector va role chinh xac.\n${domReport}`;
     } catch (err) {
-      console.log(`   Warning: Live Runner gap loi: ${err.message}`);
-      console.log(`   Chuyen sang che do fallback (dung Crawler cu)...`);
-      snapshotsMap = new Map();
+      console.log(`   Warning: Live Crawler gap loi (khong anh huong kich ban): ${err.message}`);
     }
 
-    // Buoc 3: Xay dung Action Plan (resolve locator tu DOM that)
-    console.log("\n[Pipeline] Buoc 3/4: Dang xay dung Action Plan voi locator da xac thuc...");
-    const actionPlan = buildActionPlan(parsedCases, snapshotsMap);
-    if (!fs.existsSync("artifacts")) fs.mkdirSync("artifacts");
-    fs.writeFileSync("artifacts/action-plan.json", JSON.stringify(actionPlan, null, 2));
-    console.log(`   Da luu Action Plan: artifacts/action-plan.json`);
-    console.log(`   Tong cong: ${actionPlan.testCases.length} test case(s)`);
-    for (const tc of actionPlan.testCases) {
-      const highCount = tc.actions.filter(a => a.confidence === 'high').length;
-      const lowCount = tc.actions.filter(a => a.confidence === 'low').length;
-      console.log(`   - ${tc.id}: ${tc.actions.length} action(s), ${highCount} high-confidence, ${lowCount} low-confidence`);
-    }
+    contextData = `[CHẾ ĐỘ KỊCH BẢN CHI TIẾT - SCRIPT MODE]
+QUAN TRỌNG: Người dùng đã viết kịch bản test CHI TIẾT TỪNG BƯỚC. 
+AI PHẢI chuyển đổi CHÍNH XÁC 1:1 từng bước sang code Playwright.
+TUYỆT ĐỐI KHÔNG được tự thêm, bớt hoặc thay đổi bất kỳ bước nào.
+Khi gặp mô tả mơ hồ (VD: "icon con mắt", "nút ẩn/hiện"), tra cứu dữ liệu DOM bên dưới để tìm selector chính xác.
+Nếu không tìm thấy trong DOM, dùng selector tổng quát nhất có thể (VD: button gần ô input password).
 
-    // Buoc 4: Generator - sinh file .spec.ts tu Action Plan
-    console.log("\n[Pipeline] Buoc 4/4: Dang sinh code Playwright tu Action Plan...");
+Quy tắc chuyển đổi:
+- "Mở URL" hoặc "Mở trang ..." → await page.goto(URL)
+- "Nhập 'X' vào ô 'Y'" → await page.getByPlaceholder('Y').fill('X')
+- "Nhập 'X' vào label 'Y'" → await page.getByLabel('Y').fill('X')
+- "Bỏ trống ô 'Y'" → không gọi fill() cho ô đó
+- "Bấm nút 'Z'" → await page.getByRole('button', { name: 'Z' }).or(page.getByText('Z')).first().click()
+- "Click vào 'Z'" → await page.getByText('Z').first().click()
+- "Bấm vào icon ..." → tra cứu DOM để tìm button/svg gần nhất, dùng locator('.class-name').first().click()
+- "Kiểm tra: hiển thị text 'W'" hoặc "Kiểm tra: Có thông báo 'W'" → await expect(page.getByText('W')).toBeVisible()
+- "Kiểm tra: Có cả 2 thông báo 'A' và 'B'" → 2 dòng expect riêng biệt
+- "Kiểm tra: URL không còn chứa 'X'" → await expect(page).not.toHaveURL(/.*X.*/i)
+- "Kiểm tra: URL chứa 'X'" → await expect(page).toHaveURL(/.*X.*/i)
+- "Kiểm tra: Mật khẩu dạng ẩn" → await expect(page.getByPlaceholder('Nhập mật khẩu')).toHaveAttribute('type', 'password')
+- "Kiểm tra: Mật khẩu dạng văn bản" → await expect(page.getByPlaceholder('Nhập mật khẩu')).toHaveAttribute('type', 'text')
+- "Chờ trang load xong" → await page.waitForLoadState('networkidle')
 
-    // Tinh targetName tu URL hoac TC
-    let targetName = "";
-    const urlMatch = scriptContent.match(/https?:\/\/[^\s\'\"\)\>]+/i);
-    if (urlMatch) {
-      try {
-        const urlObj = new URL(urlMatch[0]);
-        let host = urlObj.hostname.replace(/^www\./, "").split(".")[0];
-        if (host === "opensource-demo") host = "orangehrm";
-        const pathParts = urlObj.pathname.split("/").filter(Boolean);
-        const lastPath = pathParts.pop() || "main";
-        targetName = `${host}_${lastPath}`.toLowerCase().replace(/[^a-z0-9_]/g, "_");
-      } catch {}
-    }
-    if (!targetName) {
-      const tcMatch = scriptContent.match(/TC_([A-Z0-9_]+)/i);
-      if (tcMatch) {
-        targetName = `${level}_${tcMatch[1].split("_")[0].toLowerCase()}`;
-      }
-    }
-    if (!targetName) {
-      targetName = `${level}_test_suite`;
-    }
+=== KỊCH BẢN TEST CỦA NGƯỜI DÙNG ===
+${scriptContent}
+=== HẾT KỊCH BẢN ===${crawledDomSection}`;
 
-    // Sinh file .spec.ts truc tiep tu Action Plan (khong can LLM)
-    const specCode = generateSpecFromActionPlan(actionPlan);
-    const specDir = path.resolve(`tests/${level}`);
-    if (!fs.existsSync(specDir)) fs.mkdirSync(specDir, { recursive: true });
-    const specPath = path.resolve(`tests/${level}/${targetName}.spec.ts`);
-    fs.writeFileSync(specPath, specCode);
-    console.log(`\nDa sinh file test: ${specPath}`);
-    await returnToMenu();
-    return;
   } else if (level === "integration") {
     const { apiDesc } = await inquirer.prompt([
       {

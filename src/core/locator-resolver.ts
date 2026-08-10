@@ -6,6 +6,8 @@ export interface ElementInfo {
   ariaLabel?: string;
   text?: string;
   testId?: string;
+  dataSlot?: string;
+  dataValue?: string;
   id?: string;
   name?: string;
   className?: string;
@@ -16,6 +18,9 @@ export interface ElementInfo {
   scopeSelector?: string;
   ariaHasPopup?: string;
   selector?: string;
+  learnedStepType?: string;
+  learnedTarget?: string;
+  learnedLocator?: string;
   isVisible: boolean;
 }
 
@@ -79,6 +84,93 @@ function uniqueVisibleMatch(
   return uniqueTargets.size === 1 ? [...uniqueTargets.values()][0] : undefined;
 }
 
+function canonicalOptionMatch(
+  elements: ElementInfo[],
+  target: string,
+): ElementInfo | undefined {
+  const scored = elements
+    .filter(element =>
+      element.isVisible &&
+      Boolean(element.selector) &&
+      (
+        textMatches(element.text, target) ||
+        textMatches(element.accessibleName, target) ||
+        textMatches(element.dataValue, target)
+      ),
+    )
+    .map(element => {
+      const role = normalizeText(element.role || '');
+      const slot = normalizeText(element.dataSlot || '');
+      let score = 0;
+
+      if (element.tag === 'option' || role === 'option') score += 100;
+      else if (['menuitem', 'menuitemradio', 'menuitemcheckbox', 'treeitem'].includes(role)) score += 90;
+
+      if (/(?:^| )(?:item|option)$/.test(slot)) score += 70;
+      if (/(?:select|dropdown|command|combobox|listbox)/.test(slot)) score += 20;
+      if (textMatches(element.dataValue, target)) score += 30;
+      if (normalizeText(element.text || '') === target) score += 10;
+
+      return { element, score };
+    })
+    .filter(candidate => candidate.score > 0)
+    .sort((left, right) => right.score - left.score);
+
+  if (scored.length === 0) return undefined;
+  if (scored.length > 1 && scored[0].score === scored[1].score) return undefined;
+  return scored[0].element;
+}
+
+function canonicalDropdownMatch(
+  elements: ElementInfo[],
+  target: string,
+): ElementInfo | undefined {
+  const normalizedTarget = normalizeText(target);
+  const exact = (value?: string) => normalizeText(value || '') === normalizedTarget;
+  const withoutPrompt = (value?: string) => normalizeText(value || '')
+    .replace(/^(?:chon|lua chon|select)\s+/, '');
+
+  const scored = elements
+    .filter(element =>
+      element.isVisible &&
+      Boolean(element.selector) &&
+      (element.tag === 'select' || element.role === 'combobox' || element.ariaHasPopup === 'listbox'),
+    )
+    .map(element => {
+      let score = 0;
+
+      // The form label identifies the field. Its selected value may contain the
+      // target text of a different dropdown (for example "Tổ chức tôn giáo"
+      // versus the actual field labelled "Tôn giáo"), so label matches must win.
+      if (exact(element.labelText)) score += 160;
+      else if (textMatches(element.labelText, normalizedTarget)) score += 80;
+
+      if (exact(element.ariaLabel) || exact(element.accessibleName)) score += 130;
+      else if (
+        textMatches(element.ariaLabel, normalizedTarget) ||
+        textMatches(element.accessibleName, normalizedTarget)
+      ) score += 45;
+
+      if (exact(element.placeholder) || withoutPrompt(element.placeholder) === normalizedTarget) score += 120;
+      else if (textMatches(element.placeholder, normalizedTarget)) score += 40;
+
+      if (exact(element.text) || withoutPrompt(element.text) === normalizedTarget) score += 100;
+      else if (textMatches(element.text, normalizedTarget)) score += 25;
+
+      if (/select.*trigger|combobox|dropdown/.test(normalizeText(element.dataSlot || ''))) score += 30;
+      if (element.ariaHasPopup === 'listbox') score += 15;
+      if (element.scopeSelector) score += 10;
+
+      return { element, score };
+    })
+    .filter(candidate => candidate.score > 0)
+    .sort((left, right) => right.score - left.score);
+
+  if (scored.length === 0) return undefined;
+  if (scored.length > 1 && scored[0].score === scored[1].score) return undefined;
+  return scored[0].element;
+}
+
 function escapeSingleQuoted(value: string): string {
   return value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
@@ -139,6 +231,21 @@ export function resolveLocator(
 ): ResolvedLocator {
   const target = normalizeText(stepTarget);
   const elements = dom?.elements || [];
+
+  const guidedBinding = elements.find(element =>
+    element.isVisible &&
+    element.learnedStepType === stepType &&
+    normalizeText(element.learnedTarget || '') === target &&
+    Boolean(element.learnedLocator),
+  );
+  if (guidedBinding?.learnedLocator) {
+    return {
+      locator: guidedBinding.learnedLocator,
+      confidence: 'high',
+      matchedBy: 'guided_learning',
+      element: guidedBinding,
+    };
+  }
 
   // 1. Xử lý bước 'fill' (nhập liệu)
   if (stepType === 'fill') {
@@ -302,19 +409,9 @@ export function resolveLocator(
   if (stepType === 'select') {
     const cleanTarget = stepTarget.replace(/^['"]|['"]$/g, '').replace(/'/g, "\\'");
 
-    const isDropdown = (el: ElementInfo) =>
-      el.tag === 'select' || el.role === 'combobox' || el.ariaHasPopup === 'listbox';
-
-    // a. Accessible label, associated label, placeholder or visible trigger text.
-    const dropdown = uniqueVisibleMatch(elements, el =>
-      isDropdown(el) && [
-        el.ariaLabel,
-        el.accessibleName,
-        el.labelText,
-        el.placeholder,
-        el.text,
-      ].some(candidate => textMatches(candidate, target)),
-    );
+    // a. Rank real interactive triggers. An exact field label beats a selected
+    // value that merely contains the same words.
+    const dropdown = canonicalDropdownMatch(elements, target);
     if (dropdown) {
       if (dropdown.selector) {
         return {
@@ -326,18 +423,8 @@ export function resolveLocator(
       }
     }
 
-    // b. A unique label can point at a sibling custom trigger.
-    const byLabelText = uniqueVisibleMatch(elements, el =>
-      el.tag === 'label' && textMatches(el.text, target) && Boolean(el.selector),
-    );
-    if (byLabelText?.selector) {
-      return {
-        locator: `page.locator('${escapeSingleQuoted(byLabelText.selector)}')`,
-        confidence: 'medium',
-        matchedBy: 'verified_dropdown_label',
-        element: byLabelText,
-      };
-    }
+    // Never emit a <label> as a dropdown trigger: clicking the label may do
+    // nothing while a later manual click makes the crawl look successful.
 
     return {
       locator: `page.getByRole('combobox', { name: '${cleanTarget}' })`,
@@ -349,10 +436,7 @@ export function resolveLocator(
   // 4. Resolve an option only after the Crawler opened the dropdown and
   // captured the overlay/listbox state.
   if (stepType === 'option') {
-    const option = uniqueVisibleMatch(elements, el =>
-      (el.role === 'option' || el.tag === 'option' || el.role === 'menuitem') &&
-      (textMatches(el.text, target) || textMatches(el.accessibleName, target)),
-    );
+    const option = canonicalOptionMatch(elements, target);
     if (option) {
       if (option.role === 'option' || option.tag === 'option') {
         const safeName = escapeSingleQuoted((option.accessibleName || option.text || stepTarget).trim());

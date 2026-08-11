@@ -99,6 +99,14 @@ export type UnitDataValue =
   | {
       $type: 'undefined' | 'nan' | 'infinity' | 'negative-infinity' | 'bigint' | 'date' | 'regexp';
       value?: string;
+    }
+  | {
+      $type: 'map';
+      entries: [UnitDataValue, UnitDataValue][];
+    }
+  | {
+      $type: 'set';
+      values: UnitDataValue[];
     };
 
 export interface UnitExpectedResult {

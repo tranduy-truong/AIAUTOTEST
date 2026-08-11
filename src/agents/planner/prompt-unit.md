@@ -37,6 +37,10 @@ Giá trị JSON đặc biệt phải mã hoá, không viết thành chuỗi thư
 - `123n` → `{ "$type": "bigint", "value": "123" }`
 - `new Date(...)` → `{ "$type": "date", "value": "ISO-8601" }`
 - RegExp → `{ "$type": "regexp", "value": "pattern/flags" }`
+- Map → `{ "$type": "map", "entries": [[key, value]] }`
+- Set → `{ "$type": "set", "values": [value] }`
+
+Expected phải giữ đúng kiểu trong `returnType`. Không đổi `Map` thành object thường hoặc `Set` thành array. Target `async` dùng `resolve/reject`; target đồng bộ dùng `return/throw`.
 
 ## Quy tắc dependency
 
@@ -44,6 +48,7 @@ Giá trị JSON đặc biệt phải mã hoá, không viết thành chuỗi thư
 - Không bao giờ mock chính target đang kiểm tra.
 - Dependency `strategy=real` dùng thật.
 - Dependency `strategy=mock` phải ghi behavior rõ ràng trong từng test cần mock.
+- Mọi test gọi target phải liệt kê đầy đủ tất cả dependency `strategy=mock`; không mock dependency `strategy=real` hoặc `native-environment`.
 - `executionMode` phải chép nguyên từ Unit Context.
 
 ## Định dạng đầu ra bắt buộc

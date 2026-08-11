@@ -49,4 +49,73 @@ it.skip('UT_DISCOUNT_001', () => expect(applyDiscount()).toBe(90));`;
       expect.stringContaining('skip/only/todo'),
     ]));
   });
+
+  it('blocks nested mocks and non-hoisted mock factory references', () => {
+    const mockedTarget: UnitTarget = {
+      ...target,
+      dependencies: [{
+        module: 'openai', importedNames: ['OpenAI'], external: true,
+        boundary: 'network', strategy: 'mock',
+      }],
+      executionMode: 'NATIVE_WITH_MOCKS',
+    };
+    const mockedPlan: UnitPlanTarget = {
+      ...planTarget,
+      executionMode: 'NATIVE_WITH_MOCKS',
+      testCases: planTarget.testCases.map(testCase => ({
+        ...testCase,
+        mocks: [{ module: 'openai', symbol: 'OpenAI', behavior: 'returns output' }],
+      })),
+    };
+    const code = `
+import { describe, expect, it, vi } from 'vitest';
+import { applyDiscount } from '../../../src/discount';
+const output = 'unsafe';
+describe('applyDiscount', () => {
+  vi.mock('openai', () => ({ default: vi.fn(() => output) }));
+  it('UT_DISCOUNT_001 - returns discount', () => expect(applyDiscount()).toBe(90));
+});`;
+    const result = validateGeneratedUnitCode({
+      code, target: mockedTarget, planTarget: mockedPlan,
+      importPath: '../../../src/discount', framework: 'vitest',
+      dependencyPaths: new Map([['openai', 'openai']]),
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.errors).toEqual(expect.arrayContaining([
+      expect.stringContaining('top-level'),
+      expect.stringContaining('chưa vi.hoisted'),
+    ]));
+  });
+
+  it('accepts one self-contained top-level mock for a verified dependency', () => {
+    const mockedTarget: UnitTarget = {
+      ...target,
+      dependencies: [{
+        module: 'openai', importedNames: ['OpenAI'], external: true,
+        boundary: 'network', strategy: 'mock',
+      }],
+      executionMode: 'NATIVE_WITH_MOCKS',
+    };
+    const mockedPlan: UnitPlanTarget = {
+      ...planTarget,
+      executionMode: 'NATIVE_WITH_MOCKS',
+      testCases: planTarget.testCases.map(testCase => ({
+        ...testCase,
+        mocks: [{ module: 'openai', symbol: 'OpenAI', behavior: 'returns fixed client' }],
+      })),
+    };
+    const code = `
+import { describe, expect, it, vi } from 'vitest';
+vi.mock('openai', () => ({ default: vi.fn(() => ({ ok: true })) }));
+import { applyDiscount } from '../../../src/discount';
+describe('applyDiscount', () => {
+  it('UT_DISCOUNT_001 - returns discount', () => expect(applyDiscount()).toBe(90));
+});`;
+    expect(validateGeneratedUnitCode({
+      code, target: mockedTarget, planTarget: mockedPlan,
+      importPath: '../../../src/discount', framework: 'vitest',
+      dependencyPaths: new Map([['openai', 'openai']]),
+    })).toEqual({ ok: true, errors: [] });
+  });
 });

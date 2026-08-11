@@ -27,6 +27,10 @@ Tiếp nhận Target Contract và Unit Plan đã được Planner/Code Reader x�
 10. Với async: dùng `await expect(...).resolves/rejects` phù hợp.
 11. Chuyển các object `$type` trong plan thành giá trị JavaScript tương ứng (`undefined`, `NaN`, `Infinity`, `BigInt`, `Date`, `RegExp`); không truyền chuỗi `"undefined"`.
 12. Không dùng placeholder `...` để thay cho code bị thiếu; spread/rest syntax hợp lệ vẫn được phép.
+13. Mọi `vi.mock()`/`jest.mock()` phải ở top-level trước `describe`; mỗi module chỉ mock đúng một lần. Cấm đặt mock trong `describe`, `it`, hook hoặc helper.
+14. Factory mock phải tự chứa dữ liệu. Nếu cần biến dùng chung, Vitest dùng `vi.hoisted`; cấm tham chiếu biến top-level thường vì `vi.mock` bị hoist.
+15. Mock đủ mọi dependency `strategy=mock` theo đúng `testImportPath`. Cấm gọi browser, network, database hoặc filesystem thật.
+16. Chuyển `$type=map` thành `new Map(entries)` và `$type=set` thành `new Set(values)`; không đổi kiểu collection.
 
 ## Định dạng đầu ra
 

@@ -67,8 +67,8 @@ function resolveInternalModule(root: string, sourceFile: string, moduleName: str
 function classifyBoundary(moduleName: string): UnitDependency['boundary'] {
   const normalized = moduleName.toLowerCase();
   if (/(repository|database|\bdb\b|prisma|sequelize|typeorm|mongoose|redis)/.test(normalized)) return 'database';
-  if (/(axios|fetch|http|api|graphql|email|mailer|sms|queue)/.test(normalized)) return 'network';
-  if (/^(?:node:)?fs(?:\/|$)|filesystem/.test(normalized)) return 'filesystem';
+  if (/(axios|fetch|http|api|graphql|email|mailer|sms|queue|playwright|puppeteer|selenium|openai|groq|anthropic|gemini)/.test(normalized)) return 'network';
+  if (/^(?:node:)?fs(?:\/|\s|$)|filesystem/.test(normalized)) return 'filesystem';
   if (/(date|clock|time|random|uuid|nanoid)/.test(normalized)) return 'time-random';
   if (/(react|vue|angular|next|nuxt|nestjs|express|fastify)/.test(normalized)) return 'framework';
   return 'internal';
@@ -107,7 +107,15 @@ function importsForFile(source: ts.SourceFile, root: string, relativeFile: strin
 
 function dependenciesForTarget(rawCode: string, imports: ImportInfo[]): UnitDependency[] {
   return imports
-    .filter(item => item.importedNames.length === 0 || item.importedNames.some(name => new RegExp(`\\b${name}\\b`).test(rawCode)))
+    // Retain safety boundaries even when a same-file helper uses them
+    // transitively. Filtering only by rawCode allowed real browser/filesystem
+    // work to escape the unit-test mock contract.
+    .filter(item => {
+      const boundaryNeedsIsolation = ['database', 'network', 'filesystem', 'time-random'].includes(item.boundary);
+      return boundaryNeedsIsolation
+        || item.importedNames.length === 0
+        || item.importedNames.some(name => new RegExp(`\\b${name}\\b`).test(rawCode));
+    })
     .map(item => {
       const needsNativeEnvironment = item.boundary === 'framework';
       const needsMock = item.boundary !== 'internal' && !needsNativeEnvironment;
@@ -207,7 +215,6 @@ function classifyExecution(
   if (/\.tsx$|\.jsx$/i.test(relativeFile)) reasons.push('File giao diện cần runtime/framework thật.');
   if (kind === 'class' && /(^|\n)\s*@\w+/.test(rawCode)) reasons.push('Class có decorator cần runtime/framework thật.');
   if (dependencies.some(dependency => dependency.strategy === 'native-environment')) reasons.push('Có dependency framework cần môi trường dự án thật.');
-  if (kind === 'class' && dependencies.some(dependency => dependency.external)) reasons.push('Class dùng dependency ngoài cần setup native.');
   if (reasons.length > 0) return { mode: 'NATIVE_REQUIRED', reasons };
   if (dependencies.some(dependency => dependency.strategy === 'mock')) return { mode: 'NATIVE_WITH_MOCKS', reasons: [] };
   return { mode: 'NATIVE_DIRECT', reasons: [] };

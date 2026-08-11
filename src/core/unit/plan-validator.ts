@@ -17,7 +17,7 @@ function isObject(value: unknown): value is Record<string, unknown> {
 }
 
 const SPECIAL_VALUE_TYPES = new Set([
-  'undefined', 'nan', 'infinity', 'negative-infinity', 'bigint', 'date', 'regexp',
+  'undefined', 'nan', 'infinity', 'negative-infinity', 'bigint', 'date', 'regexp', 'map', 'set',
 ]);
 
 function validateDataValue(value: unknown, label: string): string[] {
@@ -30,6 +30,22 @@ function validateDataValue(value: unknown, label: string): string[] {
     }
     if (['bigint', 'date', 'regexp'].includes(value.$type) && typeof value.value !== 'string') {
       return [`${label} cần trường value dạng string cho $type=${value.$type}.`];
+    }
+    if (value.$type === 'map') {
+      if (!Array.isArray(value.entries)) return [`${label} cần entries dạng mảng cho $type=map.`];
+      return value.entries.flatMap((entry, index) => {
+        if (!Array.isArray(entry) || entry.length !== 2) {
+          return [`${label}.entries[${index}] phải là cặp [key, value].`];
+        }
+        return [
+          ...validateDataValue(entry[0], `${label}.entries[${index}][0]`),
+          ...validateDataValue(entry[1], `${label}.entries[${index}][1]`),
+        ];
+      });
+    }
+    if (value.$type === 'set') {
+      if (!Array.isArray(value.values)) return [`${label} cần values dạng mảng cho $type=set.`];
+      return value.values.flatMap((item, index) => validateDataValue(item, `${label}.values[${index}]`));
     }
     return [];
   }
@@ -68,6 +84,9 @@ function validateTarget(planTarget: UnitPlanTarget, target: UnitTarget): UnitPla
 
   const validBranches = new Set(target.branches.map(branch => branch.id));
   const validDependencies = new Set(target.dependencies.map(dependency => dependency.module));
+  const requiredMocks = new Set(
+    target.dependencies.filter(dependency => dependency.strategy === 'mock').map(dependency => dependency.module),
+  );
   const coveredBranches = new Set<string>();
   const ids = new Set<string>();
   for (const testCase of planTarget.testCases) {
@@ -96,6 +115,34 @@ function validateTarget(planTarget: UnitPlanTarget, target: UnitTarget): UnitPla
         issues.push({ code: 'INVALID_EXPECTED_RESULT', target: targetLabel, testCaseId: testCase.id, message });
       }
     }
+    const expectedKind = testCase.expected?.kind;
+    if (target.async && ['return', 'throw'].includes(String(expectedKind))) {
+      issues.push({
+        code: 'ASYNC_ORACLE_KIND_MISMATCH', target: targetLabel, testCaseId: testCase.id,
+        message: 'Target async phải dùng expected.kind=resolve hoặc reject.',
+      });
+    }
+    if (!target.async && ['resolve', 'reject'].includes(String(expectedKind))) {
+      issues.push({
+        code: 'SYNC_ORACLE_KIND_MISMATCH', target: targetLabel, testCaseId: testCase.id,
+        message: 'Target đồng bộ không được dùng expected.kind=resolve/reject.',
+      });
+    }
+    if (isObject(testCase.expected) && 'value' in testCase.expected) {
+      const expectedValue = testCase.expected.value;
+      if (/\bMap\s*</.test(target.returnType) && (!isObject(expectedValue) || expectedValue.$type !== 'map')) {
+        issues.push({
+          code: 'RETURN_TYPE_ORACLE_MISMATCH', target: targetLabel, testCaseId: testCase.id,
+          message: 'Target trả về Map; expected.value phải dùng { "$type": "map", "entries": [...] }.',
+        });
+      }
+      if (/\bSet\s*</.test(target.returnType) && (!isObject(expectedValue) || expectedValue.$type !== 'set')) {
+        issues.push({
+          code: 'RETURN_TYPE_ORACLE_MISMATCH', target: targetLabel, testCaseId: testCase.id,
+          message: 'Target trả về Set; expected.value phải dùng { "$type": "set", "values": [...] }.',
+        });
+      }
+    }
     const branchIds = Array.isArray(testCase.branchIds) ? testCase.branchIds : [];
     if (!Array.isArray(testCase.branchIds)) {
       issues.push({
@@ -120,8 +167,23 @@ function validateTarget(planTarget: UnitPlanTarget, target: UnitTarget): UnitPla
       if (!validDependencies.has(mock.module)) {
         issues.push({ code: 'INVENTED_MOCK', target: targetLabel, testCaseId: testCase.id, message: `Dependency mock không có trong source: ${mock.module}` });
       }
+      if (validDependencies.has(mock.module) && !requiredMocks.has(mock.module)) {
+        issues.push({
+          code: 'MOCK_OF_REAL_DEPENDENCY', target: targetLabel, testCaseId: testCase.id,
+          message: `Dependency ${mock.module} không có strategy=mock.`,
+        });
+      }
       if (typeof mock.behavior !== 'string' || !mock.behavior.trim()) {
         issues.push({ code: 'INVALID_MOCK_PLAN', target: targetLabel, testCaseId: testCase.id, message: 'Mock thiếu behavior rõ ràng.' });
+      }
+    }
+    const plannedMocks = new Set((testCase.mocks || []).map(mock => mock.module));
+    for (const dependency of requiredMocks) {
+      if (!plannedMocks.has(dependency)) {
+        issues.push({
+          code: 'MISSING_REQUIRED_MOCK', target: targetLabel, testCaseId: testCase.id,
+          message: `Test chưa cô lập dependency strategy=mock: ${dependency}.`,
+        });
       }
     }
   }

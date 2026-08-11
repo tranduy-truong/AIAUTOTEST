@@ -85,4 +85,30 @@ describe('Unit Code Reader', () => {
     const privateTarget = analysis.index.targets.find(item => item.symbol === 'privateHelper');
     expect(privateTarget?.executionMode).toBe('UNSUPPORTED');
   });
+
+  it('isolates browser/API/filesystem imports used through same-file helpers', () => {
+    const root = createProject();
+    const file = path.join(root, 'src', 'runner.ts');
+    fs.writeFileSync(file, `
+import fs from 'fs';
+import { chromium } from 'playwright';
+import OpenAI from 'openai';
+
+function save(value: string) { fs.writeFileSync('result.txt', value); }
+export async function execute() {
+  const browser = await chromium.launch();
+  save('done');
+  return new OpenAI({ apiKey: 'test' });
+}
+`);
+    const analysis = analyzeUnitInput(file);
+    const execute = analysis.index.targets.find(item => item.symbol === 'execute');
+
+    expect(execute?.dependencies).toEqual(expect.arrayContaining([
+      expect.objectContaining({ module: 'fs', boundary: 'filesystem', strategy: 'mock' }),
+      expect.objectContaining({ module: 'playwright', boundary: 'network', strategy: 'mock' }),
+      expect.objectContaining({ module: 'openai', boundary: 'network', strategy: 'mock' }),
+    ]));
+    expect(execute?.executionMode).toBe('NATIVE_WITH_MOCKS');
+  });
 });

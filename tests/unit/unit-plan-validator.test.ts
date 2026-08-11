@@ -49,7 +49,8 @@ function validPlan(): StructuredUnitPlan {
         },
         {
           id: 'UT_DISCOUNT_002', name: 'returns valid total', branchIds: ['B001_FALSE'], inputs: { total: 100 },
-          expected: { kind: 'return', value: 100 }, oracleSource: 'implementation', mocks: [],
+          expected: { kind: 'return', value: 100 }, oracleSource: 'implementation',
+          mocks: [{ module: './db', symbol: 'db', behavior: 'returns no persisted discount' }],
         },
       ],
     }],
@@ -71,7 +72,7 @@ describe('Structured Unit Plan validator', () => {
       inputs: {},
       expected: { kind: 'side-effect', calls: [] },
       oracleSource: 'type-contract',
-      mocks: [],
+      mocks: [{ module: './db', symbol: 'db', behavior: 'isolated during module setup' }],
     });
 
     expect(validateStructuredUnitPlan(plan, context())).toEqual([]);
@@ -88,5 +89,37 @@ describe('Structured Unit Plan validator', () => {
     expect(codes).toContain('INVENTED_BRANCH');
     expect(codes).toContain('INVENTED_MOCK');
     expect(codes).toContain('UNCOVERED_BRANCH');
+  });
+
+  it('requires safety-boundary mocks and blocks mocking real dependencies', () => {
+    const ctx = context();
+    ctx.targets[0].dependencies.push({
+      module: './math', importedNames: ['round'], external: false,
+      boundary: 'internal', strategy: 'real', resolvedFile: 'src/math.ts',
+    });
+    const plan = validPlan();
+    plan.targets[0].testCases[0].mocks = [{ module: './math', behavior: 'fake rounding' }];
+    const codes = validateStructuredUnitPlan(plan, ctx).map(issue => issue.code);
+
+    expect(codes).toContain('MOCK_OF_REAL_DEPENDENCY');
+    expect(codes).toContain('MISSING_REQUIRED_MOCK');
+  });
+
+  it('preserves Map return types in async oracles', () => {
+    const ctx = context();
+    ctx.targets[0].async = true;
+    ctx.targets[0].returnType = 'Promise<Map<string, number>>';
+    const plan = validPlan();
+    plan.targets[0].testCases.forEach(testCase => {
+      testCase.expected = {
+        kind: 'resolve',
+        value: { $type: 'map', entries: [['total', 100]] },
+      };
+    });
+    expect(validateStructuredUnitPlan(plan, ctx)).toEqual([]);
+
+    plan.targets[0].testCases[0].expected = { kind: 'resolve', value: { total: 100 } };
+    expect(validateStructuredUnitPlan(plan, ctx).map(issue => issue.code))
+      .toContain('RETURN_TYPE_ORACLE_MISMATCH');
   });
 });

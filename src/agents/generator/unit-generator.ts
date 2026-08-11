@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import * as ts from 'typescript';
 import { OpenAIAdapter } from '../../adapters/openai.js';
 import {
   freshSourceHash,
@@ -85,6 +86,120 @@ export interface UnitGeneratedCodeValidation {
   errors: string[];
 }
 
+interface GeneratedMockCall {
+  module?: string;
+  topLevel: boolean;
+  freeFactoryReferences: string[];
+}
+
+function collectBindingNames(name: ts.BindingName, output: Set<string>): void {
+  if (ts.isIdentifier(name)) {
+    output.add(name.text);
+    return;
+  }
+  for (const element of name.elements) {
+    if (!ts.isOmittedExpression(element)) collectBindingNames(element.name, output);
+  }
+}
+
+function isIdentifierReference(node: ts.Identifier): boolean {
+  const parent = node.parent;
+  if (
+    (ts.isPropertyAccessExpression(parent) && parent.name === node)
+    || (ts.isPropertyAssignment(parent) && parent.name === node)
+    || (ts.isMethodDeclaration(parent) && parent.name === node)
+    || (ts.isVariableDeclaration(parent) && parent.name === node)
+    || (ts.isParameter(parent) && parent.name === node)
+    || (ts.isBindingElement(parent) && parent.name === node)
+    || ts.isTypeReferenceNode(parent)
+    || ts.isTypeQueryNode(parent)
+  ) return false;
+  return true;
+}
+
+function topLevelHoistedNames(source: ts.SourceFile, frameworkApi: 'vi' | 'jest'): Set<string> {
+  const names = new Set<string>();
+  for (const statement of source.statements) {
+    if (!ts.isVariableStatement(statement)) continue;
+    for (const declaration of statement.declarationList.declarations) {
+      const initializer = declaration.initializer;
+      if (
+        initializer && ts.isCallExpression(initializer)
+        && ts.isPropertyAccessExpression(initializer.expression)
+        && ts.isIdentifier(initializer.expression.expression)
+        && initializer.expression.expression.text === frameworkApi
+        && initializer.expression.name.text === 'hoisted'
+      ) collectBindingNames(declaration.name, names);
+    }
+  }
+  return names;
+}
+
+function mockFactoryFreeReferences(
+  factory: ts.ArrowFunction | ts.FunctionExpression,
+  allowedHoisted: Set<string>,
+  frameworkApi: 'vi' | 'jest',
+): string[] {
+  const local = new Set<string>();
+  for (const parameter of factory.parameters) collectBindingNames(parameter.name, local);
+  const collectDeclarations = (node: ts.Node) => {
+    if (ts.isVariableDeclaration(node)) collectBindingNames(node.name, local);
+    if ((ts.isFunctionDeclaration(node) || ts.isClassDeclaration(node)) && node.name) local.add(node.name.text);
+    ts.forEachChild(node, collectDeclarations);
+  };
+  collectDeclarations(factory.body);
+
+  const allowedGlobals = new Set([
+    frameworkApi, 'undefined', 'Promise', 'Error', 'TypeError', 'Object', 'Array',
+    'Map', 'Set', 'Date', 'RegExp', 'JSON', 'Math', 'Number', 'String', 'Boolean',
+    'BigInt', 'Symbol', 'console', 'globalThis',
+  ]);
+  const free = new Set<string>();
+  const visit = (node: ts.Node) => {
+    if (
+      ts.isIdentifier(node) && isIdentifierReference(node)
+      && !local.has(node.text) && !allowedGlobals.has(node.text) && !allowedHoisted.has(node.text)
+    ) free.add(node.text);
+    ts.forEachChild(node, visit);
+  };
+  visit(factory.body);
+  return [...free].sort();
+}
+
+function inspectGeneratedMocks(code: string, framework: 'vitest' | 'jest'): {
+  calls: GeneratedMockCall[];
+  syntaxErrors: string[];
+} {
+  const source = ts.createSourceFile('generated-unit.test.ts', code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const parseDiagnostics = (source as ts.SourceFile & { parseDiagnostics?: readonly ts.Diagnostic[] }).parseDiagnostics || [];
+  const syntaxErrors = parseDiagnostics.map(diagnostic => ts.flattenDiagnosticMessageText(diagnostic.messageText, ' '));
+  const frameworkApi = framework === 'vitest' ? 'vi' : 'jest';
+  const hoisted = topLevelHoistedNames(source, frameworkApi);
+  const calls: GeneratedMockCall[] = [];
+  const visit = (node: ts.Node) => {
+    if (
+      ts.isCallExpression(node)
+      && ts.isPropertyAccessExpression(node.expression)
+      && ts.isIdentifier(node.expression.expression)
+      && node.expression.expression.text === frameworkApi
+      && node.expression.name.text === 'mock'
+    ) {
+      const moduleArgument = node.arguments[0];
+      const factory = node.arguments[1];
+      calls.push({
+        module: moduleArgument && ts.isStringLiteralLike(moduleArgument) ? moduleArgument.text : undefined,
+        topLevel: ts.isExpressionStatement(node.parent) && ts.isSourceFile(node.parent.parent),
+        freeFactoryReferences: factory && (ts.isArrowFunction(factory) || ts.isFunctionExpression(factory))
+          ? mockFactoryFreeReferences(factory, hoisted, frameworkApi)
+          : [],
+      });
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return { calls, syntaxErrors };
+}
+
 function targetImportIsPresent(code: string, target: UnitTarget, importPath: string): boolean {
   const escapedPath = importPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   if (target.defaultExport) {
@@ -112,6 +227,35 @@ export function validateGeneratedUnitCode(options: {
   if (/\.(?:skip|only)\s*\(|\b(?:it|test)\.todo\s*\(/.test(code)) errors.push('Cấm skip/only/todo trong test được sinh.');
   if (/(?:\/\/|\/\*)\s*(?:TODO|\.\.\.)|^\s*\.\.\.\s*;?\s*$/m.test(code)) {
     errors.push('Test chứa TODO hoặc placeholder rút gọn.');
+  }
+
+  const inspectedMocks = inspectGeneratedMocks(code, framework);
+  for (const syntaxError of inspectedMocks.syntaxErrors) errors.push(`File test sai cú pháp: ${syntaxError}`);
+  const allowedMockPaths = new Set(
+    target.dependencies
+      .filter(dependency => dependency.strategy === 'mock')
+      .map(dependency => dependencyPaths.get(dependency.module))
+      .filter((value): value is string => Boolean(value)),
+  );
+  const mockCounts = new Map<string, number>();
+  for (const mockCall of inspectedMocks.calls) {
+    if (!mockCall.module) {
+      errors.push('vi.mock/jest.mock phải dùng module path dạng chuỗi tĩnh.');
+      continue;
+    }
+    mockCounts.set(mockCall.module, (mockCounts.get(mockCall.module) || 0) + 1);
+    if (!mockCall.topLevel) errors.push(`Mock ${mockCall.module} phải nằm ở top-level, ngoài describe/it/hook.`);
+    if (!allowedMockPaths.has(mockCall.module)) errors.push(`Generator mock dependency không có strategy=mock: ${mockCall.module}`);
+    if (mockCall.freeFactoryReferences.length > 0) {
+      errors.push(
+        `Factory mock ${mockCall.module} tham chiếu biến chưa vi.hoisted/jest-safe: ${mockCall.freeFactoryReferences.join(', ')}`,
+      );
+    }
+  }
+  for (const mockPath of allowedMockPaths) {
+    const count = mockCounts.get(mockPath) || 0;
+    if (count === 0) errors.push(`Thiếu top-level mock bắt buộc cho dependency: ${mockPath}`);
+    if (count > 1) errors.push(`Dependency ${mockPath} chỉ được mock một lần (hiện tại: ${count}).`);
   }
 
   const escaped = target.symbol.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -231,13 +375,34 @@ export async function runUnitGenerator(): Promise<boolean> {
     fs.mkdirSync(workDir, { recursive: true });
     fs.writeFileSync(path.join(workDir, 'task.md'), prompt);
     const adapter = new OpenAIAdapter('llama-3.3-70b-versatile');
-    const result = await adapter.run({ promptDir: workDir, workDir, timeoutMs: 120000, maxTokens: 3500 });
+    let result = await adapter.run({ promptDir: workDir, workDir, timeoutMs: 120000, maxTokens: 3500 });
     if (!result.ok) {
       failures.push({ target: label, errors: [result.rawOutput] });
       continue;
     }
-    const code = extractCode(result.rawOutput);
-    const validation = validateGeneratedUnitCode({ code, target, planTarget, importPath, framework, dependencyPaths });
+    let code = extractCode(result.rawOutput);
+    let validation = validateGeneratedUnitCode({ code, target, planTarget, importPath, framework, dependencyPaths });
+    if (!validation.ok) {
+      console.warn(`   Generator output chưa đạt hợp đồng (${validation.errors.length} lỗi), đang tự sửa một lần...`);
+      fs.writeFileSync(path.join(session.runDirectory, `${slug(target.symbol)}.invalid-attempt-1.txt`), `${result.rawOutput}\n`);
+      const repairDirectory = path.join(process.cwd(), '.testkit', 'runs', `unit_gen_repair_${Date.now()}_${slug(target.symbol)}`);
+      fs.mkdirSync(repairDirectory, { recursive: true });
+      const repairPrompt = `${prompt}\n\n[LỖI STATIC CONTRACT CẦN SỬA]\n${JSON.stringify(validation.errors)}\n\nSinh lại TOÀN BỘ file test. Không giải thích, không bỏ test case.`;
+      fs.writeFileSync(path.join(repairDirectory, 'task.md'), repairPrompt);
+      const repaired = await adapter.run({
+        promptDir: repairDirectory,
+        workDir: repairDirectory,
+        timeoutMs: 120000,
+        maxTokens: 3500,
+      });
+      if (repaired.ok) {
+        result = repaired;
+        code = extractCode(result.rawOutput);
+        validation = validateGeneratedUnitCode({ code, target, planTarget, importPath, framework, dependencyPaths });
+      } else {
+        validation = { ok: false, errors: [...validation.errors, repaired.rawOutput] };
+      }
+    }
     if (!validation.ok) {
       failures.push({ target: label, errors: validation.errors });
       fs.writeFileSync(path.join(session.runDirectory, `${slug(target.symbol)}.invalid.txt`), `${result.rawOutput}\n`);

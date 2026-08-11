@@ -72,4 +72,16 @@ describe('Unit Healer diagnose-only policy', () => {
     expect(diagnosis.reasonCode).toBe('IMPORT_OR_ALIAS_NOT_RESOLVED');
     expect(diagnosis.canSelfHeal).toBe(false);
   });
+
+  it('classifies a Windows command-shim launch failure as infrastructure', () => {
+    const diagnosis = classifyUnitFailure(
+      String.raw`spawnSync D:\project\node_modules\.bin\vitest.cmd EINVAL`,
+    );
+    expect(diagnosis).toMatchObject({
+      category: 'ENVIRONMENT_ERROR',
+      reasonCode: 'UNIT_TEST_RUNNER_LAUNCH_FAILED',
+      confidence: 'high',
+      canSelfHeal: false,
+    });
+  });
 });

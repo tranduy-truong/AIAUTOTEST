@@ -46,6 +46,15 @@ export function classifyUnitFailure(errorLog: string): HealerDiagnosis {
     .replace(/đ/g, 'd');
   const failedLine = failedLineFromLog(errorLog);
 
+  if (/spawnsync .* einval|spawn .* einval|spawn .* enoent|is not recognized as an internal or external command/.test(normalized)) {
+    return {
+      category: 'ENVIRONMENT_ERROR',
+      reasonCode: 'UNIT_TEST_RUNNER_LAUNCH_FAILED',
+      confidence: 'high', canSelfHeal: false, preservesExpectedResult: true,
+      recoveryAction: 'REPORT_ONLY', failedLine,
+    };
+  }
+
   if (/cannot find module|failed to resolve import|module not found|err_module_not_found|cannot find package/.test(normalized)) {
     return {
       category: 'TEST_SCRIPT_BUG',

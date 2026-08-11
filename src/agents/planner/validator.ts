@@ -33,10 +33,66 @@ function normalizeLine(value: string): string {
 
 function normalizeGroundingText(value: string): string {
   return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
     .toLocaleLowerCase('vi')
+    .replace(/đ/g, 'd')
     .replace(/[^\p{L}\p{N}]+/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+const DESCRIPTOR_GLUE_WORDS = new Set([
+  'a', 'an', 'and', 'at', 'by', 'co', 'cua', 'duoc', 'for', 'in', 'is', 'la',
+  'mot', 'of', 'o', 'tai', 'the', 'tren', 'trong', 'under', 'with',
+]);
+
+const DESCRIPTOR_UI_WORDS = new Set([
+  'bang', 'bieu', 'button', 'combobox', 'control', 'cot', 'dialog', 'dong',
+  'drawer', 'dropdown', 'element', 'field', 'form', 'hang', 'icon', 'input',
+  'link', 'list', 'menu', 'nut', 'option', 'popup', 'record', 'row', 'select',
+  'table', 'textbox', 'tuong',
+]);
+
+const DESCRIPTOR_ALIASES = new Map<string, string>([
+  ['edit', 'chinh'],
+  ['pencil', 'but'],
+  ['hang', 'dong'],
+  ['row', 'dong'],
+  ['record', 'dong'],
+]);
+
+function groundingTokens(value: string): string[] {
+  return normalizeGroundingText(value)
+    .split(' ')
+    .filter(Boolean)
+    .map(token => DESCRIPTOR_ALIASES.get(token) || token);
+}
+
+/**
+ * target/context are semantic UI descriptions, not test data. The Planner may
+ * safely remove connective words ("là", "tại") or use an equivalent structural
+ * noun ("hàng"/"dòng"), but it may not invent a business identifier or action.
+ */
+function descriptorIsGrounded(description: string | undefined, sourceLine: string): boolean {
+  if (!description?.trim()) return true;
+
+  const normalizedDescription = normalizeGroundingText(description);
+  const normalizedSource = normalizeGroundingText(sourceLine);
+  if (normalizedSource.includes(normalizedDescription)) return true;
+
+  const sourceTokens = new Set(groundingTokens(sourceLine));
+  const descriptionTokens = groundingTokens(description);
+  const significantTokens = descriptionTokens.filter(token =>
+    !DESCRIPTOR_GLUE_WORDS.has(token) && !DESCRIPTOR_UI_WORDS.has(token),
+  );
+
+  // A generic UI descriptor such as "nút" is only safe when that same word is
+  // present in the source. Otherwise there is no semantic anchor at all.
+  if (significantTokens.length === 0) {
+    return descriptionTokens.every(token => sourceTokens.has(token));
+  }
+  return significantTokens.every(token => sourceTokens.has(token));
 }
 
 /**
@@ -115,7 +171,11 @@ function requiredFields(step: ParsedStep): string[] {
   }
 }
 
-function valuesAreGrounded(step: ParsedStep, fullSource: string): string[] {
+function valuesAreGrounded(
+  step: ParsedStep,
+  sourceLine: string,
+  fullSource: string,
+): string[] {
   const missing: string[] = [];
   for (const [field, value] of [['value', step.value], ['url', step.url]] as const) {
     if (value && !fullSource.includes(value)) missing.push(field);
@@ -125,10 +185,8 @@ function valuesAreGrounded(step: ParsedStep, fullSource: string): string[] {
       missing.push(`assertion:${assertion.value}`);
     }
   }
-  const normalizedSource = normalizeGroundingText(fullSource);
   for (const [field, description] of [['target', step.target], ['context', step.context]] as const) {
-    const normalizedDescription = normalizeGroundingText(description || '');
-    if (normalizedDescription && !normalizedSource.includes(normalizedDescription)) missing.push(field);
+    if (!descriptorIsGrounded(description, sourceLine)) missing.push(field);
   }
   return missing;
 }
@@ -218,7 +276,11 @@ export function validateStructuredE2EPlan(
           sourceLine: sourceLine || reportedSourceLine,
         });
       }
-      const ungroundedValues = valuesAreGrounded(step, fullSource);
+      const ungroundedValues = valuesAreGrounded(
+        step,
+        sourceLine || reportedSourceLine,
+        fullSource,
+      );
       if (ungroundedValues.length > 0) {
         issues.push({
           code: 'UNGROUNDED_VALUE',

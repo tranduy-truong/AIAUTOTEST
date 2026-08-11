@@ -73,6 +73,86 @@ describe('resolveLocator', () => {
     });
   });
 
+  it('scopes duplicate edit icons to the row identifier supplied by Planner', () => {
+    const snapshot: DomSnapshot = {
+      url: 'https://example.com/to-chuc',
+      afterStep: 'organization table',
+      elements: [{
+        tag: 'svg',
+        className: 'pencil',
+        selector: '#edit-tc009',
+        rowText: 'TC009 Tổ chức khác',
+        rowSelector: '#row-tc009',
+        isVisible: true,
+      }, {
+        tag: 'svg',
+        className: 'pencil',
+        selector: '#edit-tc010',
+        rowText: 'TC010 BTS GHPGVN TP. Hồ Chí Minh',
+        rowSelector: '#row-tc010',
+        isVisible: true,
+      }],
+    };
+
+    expect(resolveLocator(
+      'click',
+      'nút chỉnh sửa biểu tượng cây bút',
+      snapshot,
+      'dòng có mã tổ chức TC010',
+    )).toMatchObject({
+      locator: "page.locator('#edit-tc010')",
+      matchedBy: 'dom_icon_metadata',
+    });
+  });
+
+  it('does not fall back to another row when the requested identifier is absent', () => {
+    const snapshot: DomSnapshot = {
+      url: 'https://example.com/to-chuc',
+      afterStep: 'organization table',
+      elements: [{
+        tag: 'svg',
+        className: 'pencil',
+        selector: '#edit-tc010',
+        rowText: 'TC010 Tổ chức hiện có',
+        isVisible: true,
+      }],
+    };
+
+    expect(resolveLocator(
+      'click',
+      'nút chỉnh sửa biểu tượng cây bút',
+      snapshot,
+      'dòng có mã tổ chức TC999',
+    )).toMatchObject({
+      confidence: 'low',
+      matchedBy: 'row_context_not_found',
+    });
+  });
+
+  it('does not treat an ordinary dropdown context as a table-row scope', () => {
+    const snapshot: DomSnapshot = {
+      url: 'https://example.com/to-chuc',
+      afterStep: 'religion dropdown',
+      elements: [{
+        tag: 'input',
+        placeholder: 'Tìm kiếm',
+        selector: '#religion-search',
+        isVisible: true,
+      }, {
+        tag: 'button',
+        text: 'Tổ chức tôn giáo',
+        rowText: 'TC010 Tổ chức tôn giáo',
+        selector: '#row-action',
+        isVisible: true,
+      }],
+    };
+
+    expect(resolveLocator('fill', 'Tìm kiếm', snapshot, 'Tôn giáo')).toMatchObject({
+      locator: "page.getByPlaceholder('Tìm kiếm')",
+      confidence: 'high',
+    });
+  });
+
   it('does not invent a UI-library class when DOM evidence is absent', () => {
     const resolved = resolveLocator('click', 'icon con mắt');
     expect(resolved.locator).not.toContain('lucide');

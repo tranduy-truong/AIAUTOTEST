@@ -26,6 +26,22 @@ export function normalizeRegistryText(value: string): string {
     .trim();
 }
 
+const ROW_CONTEXT_WORDS = new Set([
+  'co', 'dong', 'du', 'hang', 'la', 'lieu', 'ma', 'record', 'row', 'tai', 'ten',
+]);
+
+export function normalizeRegistryContext(value: string): string {
+  const normalized = normalizeRegistryText(value);
+  if (!/(?:^| )(?:dong|hang|row|record)(?: |$)/.test(normalized)) return normalized;
+
+  const tokens = normalized.split(' ').filter(Boolean);
+  const stableCodes = tokens.filter(token => /[a-z].*\d|\d.*[a-z]/.test(token));
+  if (stableCodes.length > 0) return stableCodes.join(' ');
+
+  const semanticIdentity = tokens.filter(token => !ROW_CONTEXT_WORDS.has(token));
+  return semanticIdentity.join(' ') || normalized;
+}
+
 export function registryPageKey(value: string): string {
   try {
     const url = new URL(value);
@@ -88,7 +104,7 @@ function entryMatches(
   return entry.page === registryPageKey(pageUrl) &&
     entry.stepType === stepType &&
     entry.target === normalizeRegistryText(target) &&
-    (entry.context || '') === normalizeRegistryText(context || '');
+    normalizeRegistryContext(entry.context || '') === normalizeRegistryContext(context || '');
 }
 
 export function findLearnedLocator(
@@ -132,7 +148,7 @@ export function rememberLearnedLocator(
     page: registryPageKey(input.pageUrl),
     stepType: input.stepType,
     target: normalizeRegistryText(input.target),
-    context: input.context ? normalizeRegistryText(input.context) : undefined,
+    context: input.context ? normalizeRegistryContext(input.context) : undefined,
     selector: input.selector,
     learnedAt: now,
     lastVerifiedAt: now,

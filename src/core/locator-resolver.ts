@@ -16,6 +16,8 @@ export interface ElementInfo {
   nearbyInputPlaceholder?: string;
   labelText?: string;
   scopeSelector?: string;
+  rowText?: string;
+  rowSelector?: string;
   ariaHasPopup?: string;
   selector?: string;
   learnedStepType?: string;
@@ -62,6 +64,50 @@ function textMatches(candidate: string | undefined, target: string): boolean {
     target &&
     (normalizedCandidate.includes(target) || target.includes(normalizedCandidate))
   );
+}
+
+const CONTEXT_WORDS = new Set([
+  'bieu', 'co', 'cot', 'cua', 'du', 'duoi', 'duoc', 'hang', 'icon', 'la', 'ma',
+  'nut', 'o', 'record', 'row', 'tai', 'thao', 'tac', 'tren', 'trong', 'tuong',
+  'dong', 'lieu', 'to', 'chuc',
+]);
+
+function contextIdentifiers(value: string): string[] {
+  return normalizeText(value)
+    .split(' ')
+    .filter(token => token && !CONTEXT_WORDS.has(token));
+}
+
+function rowMatchesContext(rowText: string | undefined, context: string): boolean {
+  const normalizedRow = normalizeText(rowText || '');
+  if (!normalizedRow || !context) return false;
+  if (normalizedRow.includes(context) || context.includes(normalizedRow)) return true;
+
+  const identifiers = contextIdentifiers(context);
+  return identifiers.length > 0 && identifiers.every(token =>
+    normalizedRow.split(' ').includes(token),
+  );
+}
+
+function elementsForContext(
+  elements: ElementInfo[],
+  context: string,
+): { elements: ElementInfo[]; rowContextRequired: boolean; rowContextMatched: boolean } {
+  if (!context) {
+    return { elements, rowContextRequired: false, rowContextMatched: false };
+  }
+
+  const identifiers = contextIdentifiers(context);
+  const rowContextRequired = /(?:^| )(?:dong|hang|row|record)(?: |$)/.test(context) ||
+    identifiers.some(token => /[a-z].*\d|\d.*[a-z]/.test(token));
+  if (!rowContextRequired) {
+    return { elements, rowContextRequired: false, rowContextMatched: false };
+  }
+  const scoped = elements.filter(element => rowMatchesContext(element.rowText, context));
+  if (scoped.length > 0) {
+    return { elements: scoped, rowContextRequired, rowContextMatched: true };
+  }
+  return { elements, rowContextRequired, rowContextMatched: false };
 }
 
 function uniqueVisibleMatch(
@@ -251,10 +297,22 @@ export function resolveLocator(
     };
   }
 
+  const scoped = elementsForContext(elements, context);
+  // A row identifier is a hard safety boundary. If TC010 was requested but no
+  // captured row contains TC010, never fall back to the first pencil icon.
+  if (scoped.rowContextRequired && !scoped.rowContextMatched) {
+    return {
+      locator: `page.getByText('${escapeSingleQuoted(stepTarget)}')`,
+      confidence: 'low',
+      matchedBy: 'row_context_not_found',
+    };
+  }
+  const candidateElements = scoped.rowContextMatched ? scoped.elements : elements;
+
   // 1. Xử lý bước 'fill' (nhập liệu)
   if (stepType === 'fill') {
     // a. Tìm theo placeholder (độ tin cậy cao)
-    const byPlaceholder = uniqueVisibleMatch(elements, el => textMatches(el.placeholder, target));
+    const byPlaceholder = uniqueVisibleMatch(candidateElements, el => textMatches(el.placeholder, target));
     if (byPlaceholder && byPlaceholder.placeholder) {
       return {
         locator: `page.getByPlaceholder('${byPlaceholder.placeholder}')`,
@@ -265,7 +323,7 @@ export function resolveLocator(
     }
 
     // b. Tìm theo ariaLabel (độ tin cậy cao)
-    const byAriaLabel = uniqueVisibleMatch(elements, el =>
+    const byAriaLabel = uniqueVisibleMatch(candidateElements, el =>
       (el.tag === 'input' || el.tag === 'textarea') &&
       (textMatches(el.ariaLabel, target) || textMatches(el.labelText, target)),
     );
@@ -289,7 +347,7 @@ export function resolveLocator(
     }
 
     // c. Tìm theo name (độ tin cậy trung bình)
-    const byName = uniqueVisibleMatch(elements, el => textMatches(el.name, target));
+    const byName = uniqueVisibleMatch(candidateElements, el => textMatches(el.name, target));
     if (byName && byName.name) {
       return {
         locator: `page.locator('[name="${byName.name}"]')`,
@@ -300,7 +358,7 @@ export function resolveLocator(
     }
 
     // d. Tìm theo id (độ tin cậy trung bình)
-    const byId = uniqueVisibleMatch(elements, el => textMatches(el.id, target));
+    const byId = uniqueVisibleMatch(candidateElements, el => textMatches(el.id, target));
     if (byId && byId.id) {
       return {
         locator: `page.locator('#${byId.id}')`,
@@ -325,7 +383,7 @@ export function resolveLocator(
     
     // a. Tìm button hoặc link có text trùng khớp (độ tin cậy cao)
     const isButtonOrLink = (el: ElementInfo) => el.tag === 'button' || el.tag === 'a' || el.role === 'button' || el.role === 'link';
-    const byText = uniqueVisibleMatch(elements, el =>
+    const byText = uniqueVisibleMatch(candidateElements, el =>
       isButtonOrLink(el) && (
         textMatches(el.text, target) ||
         textMatches(el.accessibleName, target) ||
@@ -346,7 +404,7 @@ export function resolveLocator(
 
     // Frameworks sometimes render a clickable div/span. Only use it when the
     // live snapshot provides a unique selector; never infer a CSS class.
-    const byVerifiedInteractiveText = uniqueVisibleMatch(elements, el =>
+    const byVerifiedInteractiveText = uniqueVisibleMatch(candidateElements, el =>
       Boolean(el.selector) &&
       (Boolean(el.ariaHasPopup) || el.role === 'button' || el.role === 'menuitem') &&
       (
@@ -365,7 +423,7 @@ export function resolveLocator(
     }
 
     // b. Icon chỉ được resolve khi snapshot DOM cung cấp bằng chứng thực tế.
-    const iconElement = findIconElement(target, elements);
+    const iconElement = findIconElement(target, candidateElements);
     if (iconElement?.selector) {
       const safeSelector = iconElement.selector.replace(/'/g, "\\'");
       const hasAccessibleEvidence = Boolean(iconElement.ariaLabel || iconElement.accessibleName || iconElement.testId);
@@ -378,7 +436,7 @@ export function resolveLocator(
     }
 
     // c. Tìm theo ariaLabel (độ tin cậy trung bình)
-    const byAriaLabel = uniqueVisibleMatch(elements, el => textMatches(el.ariaLabel, target));
+    const byAriaLabel = uniqueVisibleMatch(candidateElements, el => textMatches(el.ariaLabel, target));
     if (byAriaLabel && byAriaLabel.ariaLabel) {
       const safeLabel = byAriaLabel.ariaLabel.replace(/'/g, "\\'");
       return {
@@ -390,7 +448,7 @@ export function resolveLocator(
     }
 
     // d. Tìm link có text (độ tin cậy trung bình)
-    const linkByText = elements.find(el => (el.tag === 'a' || el.role === 'link') && el.text && normalizeText(el.text).includes(target));
+    const linkByText = candidateElements.find(el => (el.tag === 'a' || el.role === 'link') && el.text && normalizeText(el.text).includes(target));
     if (linkByText && linkByText.text) {
       const safeName = linkByText.text.trim().replace(/'/g, "\\'");
       return {
@@ -415,7 +473,7 @@ export function resolveLocator(
 
     // a. Rank real interactive triggers. An exact field label beats a selected
     // value that merely contains the same words.
-    const dropdown = canonicalDropdownMatch(elements, target);
+    const dropdown = canonicalDropdownMatch(candidateElements, target);
     if (dropdown) {
       if (dropdown.selector) {
         return {
@@ -440,7 +498,7 @@ export function resolveLocator(
   // 4. Resolve an option only after the Crawler opened the dropdown and
   // captured the overlay/listbox state.
   if (stepType === 'option') {
-    const option = canonicalOptionMatch(elements, target);
+    const option = canonicalOptionMatch(candidateElements, target);
     if (option) {
       if (option.role === 'option' || option.tag === 'option') {
         const safeName = escapeSingleQuoted((option.accessibleName || option.text || stepTarget).trim());
@@ -461,7 +519,7 @@ export function resolveLocator(
       }
     }
 
-    const verifiedTextOption = uniqueVisibleMatch(elements, el =>
+    const verifiedTextOption = uniqueVisibleMatch(candidateElements, el =>
       Boolean(el.selector) && textMatches(el.text, target),
     );
     if (verifiedTextOption?.selector) {

@@ -167,6 +167,7 @@ export function guidedPickScript(
         ) || clicked;
         const selector = selectorFor(element);
         const scope = element.closest('dialog, [role="dialog"], [aria-modal="true"], form, [data-slot="sheet-content"], [class*="drawer"], [class*="modal"]');
+        const row = element.closest('tr, [role="row"], [data-row-key], [data-testid*="row"], [class*="table-row"]');
         cleanup();
         globalThis[resultKey] = {
           cancelled: false,
@@ -187,6 +188,8 @@ export function guidedPickScript(
           accessibleName: element.getAttribute('aria-label') || (element.textContent || '').trim().substring(0, 100) || undefined,
           ariaHasPopup: element.getAttribute('aria-haspopup') || undefined,
           scopeSelector: scope ? selectorFor(scope) : undefined,
+          rowText: row ? (row.textContent || '').trim().replace(/\s+/g, ' ').substring(0, 300) : undefined,
+          rowSelector: row ? selectorFor(row) : undefined,
           isVisible: true,
         };
       }
@@ -300,6 +303,7 @@ export const CAPTURE_SNAPSHOT_SCRIPT = String.raw`
       const wrappingLabel = node.closest('label');
       const nearbyLabel = explicitLabel || wrappingLabel || node.parentElement?.querySelector('label');
       const scope = node.closest('dialog, [role="dialog"], [aria-modal="true"], form, [data-slot="sheet-content"], [class*="drawer"], [class*="modal"]');
+      const row = node.closest('tr, [role="row"], [data-row-key], [data-testid*="row"], [class*="table-row"]');
 
       return {
         tag: node.tagName.toLowerCase(),
@@ -319,6 +323,8 @@ export const CAPTURE_SNAPSHOT_SCRIPT = String.raw`
         nearbyInputPlaceholder: (nearbyInput && (nearbyInput.placeholder || nearbyInput.name)) || undefined,
         labelText: (nearbyLabel && nearbyLabel.textContent || '').trim().replace(/\s*\*\s*$/, '').substring(0, 100) || undefined,
         scopeSelector: scope ? uniqueSelector(scope) : undefined,
+        rowText: row ? (row.textContent || '').trim().replace(/\s+/g, ' ').substring(0, 300) : undefined,
+        rowSelector: row ? uniqueSelector(row) : undefined,
         ariaHasPopup: node.getAttribute('aria-haspopup') || (interactive && interactive.getAttribute('aria-haspopup')) || undefined,
         selector: uniqueSelector(node),
         isVisible,
@@ -396,6 +402,8 @@ export function buildCompactDomReport(
           element.nearbyInputPlaceholder,
           element.labelText,
           element.scopeSelector,
+          element.rowText,
+          element.rowSelector,
           element.ariaHasPopup,
           element.selector,
         ]);
@@ -416,7 +424,7 @@ export function buildCompactDomReport(
     `- Elements included: ${selected.length}`,
     '- Duplicate elements across test cases and states were removed.',
     '',
-    '| Tag | Type/Role | Accessible name | Label/Placeholder | Text | Test ID/ID/Name | Scope | Verified selector |',
+    '| Tag | Type/Role | Accessible name | Label/Placeholder | Text | Test ID/ID/Name | Scope/Row | Verified selector |',
     '| --- | --- | --- | --- | --- | --- | --- | --- |',
   ];
 
@@ -428,7 +436,7 @@ export function buildCompactDomReport(
       element.labelText || element.placeholder,
       element.text,
       element.testId || element.id || element.name,
-      element.scopeSelector || element.nearbyInputPlaceholder,
+      element.rowText || element.rowSelector || element.scopeSelector || element.nearbyInputPlaceholder,
       element.selector,
     ].map(reportCell).join(' | ')} |`);
   }

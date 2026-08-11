@@ -124,6 +124,58 @@ describe('AI Planner structured contract', () => {
     expect(result.issues).toContainEqual(expect.objectContaining({ code: 'UNGROUNDED_STEP' }));
   });
 
+  it('accepts a non-contiguous row context derived from the same Vietnamese source line', () => {
+    const line = "Tại dòng dữ liệu mã tổ chức là ' TC010', bấm nút chỉnh sửa có biểu tượng cây bút dưới cột 'Thao tác'";
+    const script = ['TC_03: Chỉnh sửa thông tin tổ chức', `- ${line}`].join('\n');
+    const plan: StructuredE2EPlan = {
+      version: 2,
+      source: 'ai-planner',
+      testCases: [{
+        id: 'TC_03',
+        name: 'Chỉnh sửa thông tin tổ chức',
+        steps: [{
+          type: 'click',
+          target: 'nút chỉnh sửa biểu tượng cây bút',
+          context: 'dòng có mã tổ chức TC010',
+          raw: 'Bấm nút chỉnh sửa ở dòng TC010',
+          sourceLine: line,
+          plannerConfidence: 'high',
+        }],
+        unparsedSteps: [],
+      }],
+      clarifications: [],
+    };
+
+    expect(validateStructuredE2EPlan(plan, script)).toEqual({ valid: true, issues: [] });
+  });
+
+  it('rejects an invented row identifier even when the UI context words are plausible', () => {
+    const line = "Tại dòng dữ liệu mã tổ chức là 'TC010', bấm nút chỉnh sửa";
+    const script = ['TC_03: Chỉnh sửa', `- ${line}`].join('\n');
+    const plan: StructuredE2EPlan = {
+      version: 2,
+      source: 'ai-planner',
+      testCases: [{
+        id: 'TC_03',
+        name: 'Chỉnh sửa',
+        steps: [{
+          type: 'click',
+          target: 'nút chỉnh sửa',
+          context: 'hàng có mã tổ chức TC999',
+          raw: 'Bấm chỉnh sửa ở TC999',
+          sourceLine: line,
+          plannerConfidence: 'high',
+        }],
+        unparsedSteps: [],
+      }],
+      clarifications: [],
+    };
+
+    expect(validateStructuredE2EPlan(plan, script).issues).toContainEqual(
+      expect.objectContaining({ code: 'UNGROUNDED_VALUE' }),
+    );
+  });
+
   it('accepts one Vietnamese compound line split into ordered atomic actions', () => {
     const result = validateStructuredE2EPlan(validPlan(), sourceScript);
 

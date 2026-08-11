@@ -73,4 +73,30 @@ describe('locator registry', () => {
       'input[placeholder="Nhập tên tổ chức"]',
     );
   });
+
+  it('reuses a learned row locator across equivalent row-context wording', () => {
+    const registry = { version: 1 as const, entries: [] };
+    rememberLearnedLocator(registry, {
+      pageUrl: 'https://example.com/to-chuc',
+      stepType: 'click',
+      target: 'nút chỉnh sửa',
+      context: 'dòng có mã tổ chức TC010',
+      selector: '#edit-tc010',
+    });
+
+    expect(findLearnedLocator(
+      registry,
+      'https://example.com/to-chuc',
+      'click',
+      'nút chỉnh sửa',
+      'hàng dữ liệu mã TC010',
+    )?.selector).toBe('#edit-tc010');
+    expect(findLearnedLocator(
+      registry,
+      'https://example.com/to-chuc',
+      'click',
+      'nút chỉnh sửa',
+      'dòng mã TC999',
+    )).toBeUndefined();
+  });
 });

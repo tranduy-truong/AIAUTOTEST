@@ -88,6 +88,42 @@ function validPlan(steps = validSteps()): StructuredE2EPlan {
 }
 
 describe('AI Planner structured contract', () => {
+  it('re-anchors quote-only formatting changes to the exact user line', () => {
+    const script = [
+      'TC_01: Thêm tổ chức',
+      '- Bấm nút có chữ "Thêm"',
+    ].join('\n');
+    const plan: StructuredE2EPlan = {
+      version: 2,
+      source: 'ai-planner',
+      testCases: [{
+        id: 'TC_01',
+        name: 'Thêm tổ chức',
+        steps: [{
+          type: 'click',
+          target: 'Thêm',
+          raw: 'Bấm nút Thêm',
+          sourceLine: "Bấm nút có chữ 'Thêm'",
+          plannerConfidence: 'high',
+        }],
+        unparsedSteps: [],
+      }],
+      clarifications: [],
+    };
+
+    expect(validateStructuredE2EPlan(plan, script)).toEqual({ valid: true, issues: [] });
+    expect(plan.testCases[0].steps[0].sourceLine).toBe('Bấm nút có chữ "Thêm"');
+  });
+
+  it('still rejects a source line that drops meaningful words', () => {
+    const plan = validPlan();
+    plan.testCases[0].steps[1].sourceLine = "Mở 'Trụ sở chính'";
+
+    const result = validateStructuredE2EPlan(plan, sourceScript);
+
+    expect(result.issues).toContainEqual(expect.objectContaining({ code: 'UNGROUNDED_STEP' }));
+  });
+
   it('accepts one Vietnamese compound line split into ordered atomic actions', () => {
     const result = validateStructuredE2EPlan(validPlan(), sourceScript);
 

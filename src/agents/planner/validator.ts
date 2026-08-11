@@ -39,6 +39,23 @@ function normalizeGroundingText(value: string): string {
     .trim();
 }
 
+/**
+ * Re-anchor harmless formatting changes made by the LLM (single/double quotes,
+ * punctuation, casing) to the exact source line. The whole normalized line
+ * must still be identical and the match must be unique, so this cannot hide a
+ * dropped word or attach an action to an ambiguous line.
+ */
+function matchSourceLine(candidate: string, sourceLines: string[]): string | undefined {
+  const normalized = normalizeLine(candidate);
+  const exact = sourceLines.find(line => line === normalized);
+  if (exact) return exact;
+
+  const key = normalizeGroundingText(normalized);
+  if (!key) return undefined;
+  const equivalent = sourceLines.filter(line => normalizeGroundingText(line) === key);
+  return equivalent.length === 1 ? equivalent[0] : undefined;
+}
+
 interface SourceTestCase {
   name: string;
   lines: string[];
@@ -163,16 +180,19 @@ export function validateStructuredE2EPlan(
         issues.push({ code: 'INVALID_STEP_TYPE', message: `Loại bước không hợp lệ: ${step.type}`, testCaseId: id, stepIndex });
         continue;
       }
-      const sourceLine = normalizeLine(step.sourceLine || step.raw || '');
-      if (!sourceLine || !sourceLines.includes(sourceLine)) {
+      const reportedSourceLine = normalizeLine(step.sourceLine || step.raw || '');
+      const sourceLine = matchSourceLine(reportedSourceLine, sourceLines);
+      if (!sourceLine) {
         issues.push({
           code: 'UNGROUNDED_STEP',
           message: 'Mỗi atomic step phải trỏ về một dòng nguyên văn trong kịch bản.',
           testCaseId: id,
           stepIndex,
-          sourceLine,
+          sourceLine: reportedSourceLine,
         });
       } else {
+        // Persist the exact user-authored line in the canonical JSON plan.
+        step.sourceLine = sourceLine;
         coveredLines.add(sourceLine);
       }
 
@@ -183,11 +203,11 @@ export function validateStructuredE2EPlan(
           message: `Bước thiếu dữ liệu bắt buộc: ${missing.join(', ')}`,
           testCaseId: id,
           stepIndex,
-          sourceLine,
+          sourceLine: sourceLine || reportedSourceLine,
         });
       }
       if (step.type === 'check' && !(step.assertions || []).every(validateAssertion)) {
-        issues.push({ code: 'INVALID_ASSERTION', message: 'Assertion không đúng schema.', testCaseId: id, stepIndex, sourceLine });
+        issues.push({ code: 'INVALID_ASSERTION', message: 'Assertion không đúng schema.', testCaseId: id, stepIndex, sourceLine: sourceLine || reportedSourceLine });
       }
       if (step.type === 'check' && (step.assertions || []).some(assertion => assertion.kind === 'unknown')) {
         issues.push({
@@ -195,7 +215,7 @@ export function validateStructuredE2EPlan(
           message: step.clarificationQuestion || 'Expected Result còn mơ hồ; cần tester xác nhận điều kiện quan sát được.',
           testCaseId: id,
           stepIndex,
-          sourceLine,
+          sourceLine: sourceLine || reportedSourceLine,
         });
       }
       const ungroundedValues = valuesAreGrounded(step, fullSource);
@@ -205,7 +225,7 @@ export function validateStructuredE2EPlan(
           message: `Planner đã tạo dữ liệu không có trong kịch bản: ${ungroundedValues.join(', ')}`,
           testCaseId: id,
           stepIndex,
-          sourceLine,
+          sourceLine: sourceLine || reportedSourceLine,
         });
       }
       if (step.needsClarification || step.plannerConfidence === 'low') {
@@ -214,7 +234,7 @@ export function validateStructuredE2EPlan(
           message: step.clarificationQuestion || 'Bước còn mơ hồ và cần tester xác nhận.',
           testCaseId: id,
           stepIndex,
-          sourceLine,
+          sourceLine: sourceLine || reportedSourceLine,
         });
       }
     }

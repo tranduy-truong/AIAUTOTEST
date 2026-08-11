@@ -195,11 +195,13 @@ export async function runUnitGenerator(): Promise<boolean> {
 
   const generatedFiles: string[] = [];
   const failures: Array<{ target: string; errors: string[] }> = [];
-  for (const target of context.targets) {
-    const label = `${target.sourceFile}#${target.symbol}`;
-    const planTarget = plan.targets.find(item => item.sourceFile === target.sourceFile && item.symbol === target.symbol);
-    if (!planTarget) {
-      failures.push({ target: label, errors: ['Unit Plan không chứa target.'] });
+  for (const planTarget of plan.targets) {
+    const target = context.targets.find(
+      item => item.sourceFile === planTarget.sourceFile && item.symbol === planTarget.symbol,
+    );
+    const label = `${planTarget.sourceFile}#${planTarget.symbol}`;
+    if (!target) {
+      failures.push({ target: label, errors: ['Unit Context không chứa target của Planner.'] });
       continue;
     }
     const currentHash = freshSourceHash(target, context.project.projectRoot);

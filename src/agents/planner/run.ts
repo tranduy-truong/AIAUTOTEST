@@ -416,9 +416,16 @@ async function runStructuredUnitPlanner(
       path.join(session.runDirectory, 'test-plan-unit.invalid.txt'),
       `${rawOutputs.join('\n\n--- TARGET OUTPUT ---\n\n')}\n`,
     );
-    console.error(`❌ Planner Unit chưa đạt hợp đồng (${allIssues.length} lỗi). Generator đã được chặn.`);
-    console.error(`   Chi tiết: ${path.join(session.runDirectory, 'planner-validation-errors.json')}`);
-    return false;
+    if (plannedTargets.length === 0) {
+      console.error(`❌ Không target nào đạt hợp đồng Planner Unit (${allIssues.length} lỗi). Generator đã được chặn.`);
+      console.error(`   Chi tiết: ${path.join(session.runDirectory, 'planner-validation-errors.json')}`);
+      return false;
+    }
+    console.warn(
+      `⚠️ ${plannedTargets.length}/${context.targets.length} target đạt hợp đồng; ` +
+      `${context.targets.length - plannedTargets.length} target được cách ly, không chặn các target hợp lệ.`,
+    );
+    console.warn(`   Chi tiết target chưa hợp lệ: ${path.join(session.runDirectory, 'planner-validation-errors.json')}`);
   }
 
   const plan: StructuredUnitPlan = {
@@ -432,7 +439,13 @@ async function runStructuredUnitPlanner(
     targets: plannedTargets,
     clarifications: [...new Set(clarifications)],
   };
-  const finalIssues = validateStructuredUnitPlan(plan, context);
+  const validContext: UnitContextBundle = {
+    ...context,
+    targets: context.targets.filter(target => plannedTargets.some(
+      planned => planned.sourceFile === target.sourceFile && planned.symbol === target.symbol,
+    )),
+  };
+  const finalIssues = validateStructuredUnitPlan(plan, validContext);
   if (finalIssues.length > 0) {
     fs.writeFileSync(
       path.join(session.runDirectory, 'planner-validation-errors.json'),

@@ -90,4 +90,4 @@ Chỉ xuất một JSON object, không dùng markdown:
 }
 ```
 
-Mỗi branch ID trong context phải xuất hiện trong ít nhất một test case. Một test có thể phủ nhiều branch nếu cùng một đường chạy. Không bỏ target.
+Mỗi branch ID trong context phải xuất hiện trong ít nhất một test case. Một test có thể phủ nhiều branch nếu cùng một đường chạy. Test bổ trợ như constructor, giá trị mặc định hoặc metadata không gắn với decision branch được dùng `"branchIds": []`. Không bỏ target.

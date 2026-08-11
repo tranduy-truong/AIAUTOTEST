@@ -62,6 +62,21 @@ describe('Structured Unit Plan validator', () => {
     expect(validateStructuredUnitPlan(validPlan(), context())).toEqual([]);
   });
 
+  it('allows supplemental constructor/setup tests without a branch ID when real branches remain covered', () => {
+    const plan = validPlan();
+    plan.targets[0].testCases.unshift({
+      id: 'UT_DISCOUNT_000',
+      name: 'initializes exported module metadata',
+      branchIds: [],
+      inputs: {},
+      expected: { kind: 'side-effect', calls: [] },
+      oracleSource: 'type-contract',
+      mocks: [],
+    });
+
+    expect(validateStructuredUnitPlan(plan, context())).toEqual([]);
+  });
+
   it('blocks invented branches, mocks, and stale source hashes', () => {
     const plan = validPlan();
     plan.targets[0].sourceHash = 'stale';

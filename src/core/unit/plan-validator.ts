@@ -96,10 +96,16 @@ function validateTarget(planTarget: UnitPlanTarget, target: UnitTarget): UnitPla
         issues.push({ code: 'INVALID_EXPECTED_RESULT', target: targetLabel, testCaseId: testCase.id, message });
       }
     }
-    if (!Array.isArray(testCase.branchIds) || testCase.branchIds.length === 0) {
-      issues.push({ code: 'MISSING_BRANCH_REFERENCE', target: targetLabel, testCaseId: testCase.id, message: 'Test case chưa trỏ tới branch ID.' });
+    const branchIds = Array.isArray(testCase.branchIds) ? testCase.branchIds : [];
+    if (!Array.isArray(testCase.branchIds)) {
+      issues.push({
+        code: 'INVALID_BRANCH_REFERENCES',
+        target: targetLabel,
+        testCaseId: testCase.id,
+        message: 'branchIds phải là mảng. Test bổ trợ không gắn với decision branch phải dùng mảng rỗng.',
+      });
     }
-    for (const branchId of testCase.branchIds || []) {
+    for (const branchId of branchIds) {
       if (!validBranches.has(branchId)) {
         issues.push({ code: 'INVENTED_BRANCH', target: targetLabel, testCaseId: testCase.id, message: `Branch không tồn tại: ${branchId}` });
       } else coveredBranches.add(branchId);

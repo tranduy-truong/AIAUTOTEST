@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { chromium, Browser, Locator, Page } from 'playwright';
-import { ParsedStep, ParsedTestCase } from '../../core/step-parser.js';
+import type { ParsedStep, ParsedTestCase } from '../planner/schema.js';
 import {
   DomSnapshot,
   ElementInfo,
@@ -475,6 +475,7 @@ function annotateGuidedBinding(
   target: string,
   selector: string,
   metadata: Partial<ElementInfo> = {},
+  context?: string,
 ): void {
   const existing = snapshot.elements.find(element => element.selector === selector);
   const binding: ElementInfo = existing || {
@@ -487,6 +488,7 @@ function annotateGuidedBinding(
     isVisible: true,
     learnedStepType: stepType,
     learnedTarget: target,
+    learnedContext: context,
     learnedLocator: `page.locator('${escapeSingleQuoted(selector)}')`,
   });
   if (!existing) snapshot.elements.push(binding);
@@ -551,7 +553,7 @@ async function learnGuidedLocatorFor(
     selector: choice.selector,
   });
   saveLocatorRegistry(runtime.registry);
-  annotateGuidedBinding(snapshot, stepType, target, choice.selector, choice);
+  annotateGuidedBinding(snapshot, stepType, target, choice.selector, choice, context);
   return page.locator(choice.selector);
 }
 
@@ -575,7 +577,7 @@ async function uniqueLocatorFor(
     const learnedLocator = page.locator(learned.selector);
     if (await locatorIsUniqueAndVisible(learnedLocator)) {
       learned.lastVerifiedAt = new Date().toISOString();
-      annotateGuidedBinding(snapshot, stepType, target, learned.selector);
+      annotateGuidedBinding(snapshot, stepType, target, learned.selector, {}, context);
       saveLocatorRegistry(runtime.registry);
       console.log(`[Crawler] Dùng locator đã ghi nhớ cho "${target}".`);
       return learnedLocator;
@@ -585,7 +587,7 @@ async function uniqueLocatorFor(
     console.warn(`[Crawler] Locator cũ của "${target}" đã hỏng; cần xác nhận lại.`);
   }
 
-  const resolution = resolveLocator(stepType, target, snapshot);
+  const resolution = resolveLocator(stepType, target, snapshot, context);
   const candidates = locatorCandidates(page, resolution, target);
 
   for (const candidate of candidates) {
@@ -611,7 +613,7 @@ async function uniqueLocator(
   runtime: LocatorRuntime,
   guidance?: CrawlerGuidanceContext,
 ): Promise<Locator> {
-  return uniqueLocatorFor(page, step.type, step.target || '', snapshot, runtime, undefined, guidance);
+  return uniqueLocatorFor(page, step.type, step.target || '', snapshot, runtime, step.context, guidance);
 }
 
 export function describeStepForGuidance(step: ParsedStep): string {
@@ -628,6 +630,8 @@ export function describeStepForGuidance(step: ParsedStep): string {
       return 'Kiểm tra kết quả mong đợi';
     case 'wait':
       return 'Chờ trang sẵn sàng';
+    case 'noop':
+      return step.raw || 'Giữ nguyên trạng thái/để trống';
   }
 }
 
@@ -650,12 +654,13 @@ async function waitForVerifiedTarget(
   target: string,
   afterStep: string,
   timeout = 8000,
+  context?: string,
 ): Promise<DomSnapshot> {
   const deadline = Date.now() + timeout;
   let latestSnapshot = await captureSnapshot(page, afterStep);
 
   while (Date.now() <= deadline) {
-    const resolution = resolveLocator(stepType, target, latestSnapshot);
+    const resolution = resolveLocator(stepType, target, latestSnapshot, context);
     if (resolution.confidence !== 'low') {
       const candidates = locatorCandidates(page, resolution, target);
       for (const candidate of candidates) {
@@ -667,7 +672,7 @@ async function waitForVerifiedTarget(
     latestSnapshot = await captureSnapshot(page, afterStep);
   }
 
-  const resolution = resolveLocator(stepType, target, latestSnapshot);
+  const resolution = resolveLocator(stepType, target, latestSnapshot, context);
   throw new Error(
     `Trang thai moi khong hien thi locator duy nhat cho "${target}" (${resolution.matchedBy})`,
   );
@@ -680,6 +685,7 @@ export function nextStateStep(
   for (let index = currentIndex + 1; index < steps.length; index++) {
     const step = steps[index];
     if (step.type === 'goto' || step.type === 'check' || step.type === 'wait') return undefined;
+    if (step.type === 'noop') continue;
     if (step.target) return { step, stepNumber: index + 1 };
   }
   return undefined;
@@ -715,7 +721,7 @@ export function protectedGotoAfterLogin(
   let nextIndex = currentIndex + 1;
   while (
     nextIndex < steps.length &&
-    (steps[nextIndex].type === 'wait' || steps[nextIndex].type === 'check')
+    (steps[nextIndex].type === 'wait' || steps[nextIndex].type === 'check' || steps[nextIndex].type === 'noop')
   ) {
     nextIndex++;
   }
@@ -732,7 +738,7 @@ export function loginStepBeforeProtectedGoto(
   let loginIndex = gotoIndex - 1;
   while (
     loginIndex >= 0 &&
-    (steps[loginIndex].type === 'wait' || steps[loginIndex].type === 'check')
+    (steps[loginIndex].type === 'wait' || steps[loginIndex].type === 'check' || steps[loginIndex].type === 'noop')
   ) {
     loginIndex--;
   }
@@ -868,6 +874,11 @@ export async function runLive(testCases: ParsedTestCase[]): Promise<Map<string, 
             const beforeAction = await captureSnapshot(page, `before step ${stepNumber}: ${step.raw}`);
             snapshots.push(beforeAction);
 
+            if (step.type === 'noop') {
+              console.log(`[Live Runner]   NO-OP step ${stepNumber}: giu nguyen trang thai theo kich ban`);
+              continue;
+            }
+
             if (step.type === 'fill') {
               const locator = await uniqueLocator(page, step, beforeAction, runtime, guidance);
               await locator.fill(step.value || '', { timeout: 10000 });
@@ -899,6 +910,8 @@ export async function runLive(testCases: ParsedTestCase[]): Promise<Map<string, 
                     expectedState.step.type,
                     expectedState.step.target || '',
                     `ready for step ${expectedState.stepNumber}: ${expectedState.step.raw}`,
+                    8000,
+                    expectedState.step.context,
                   );
                 } catch (error) {
                   if (!guided) throw error;

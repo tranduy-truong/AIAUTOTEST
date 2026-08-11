@@ -2,6 +2,35 @@ import { describe, expect, it } from 'vitest';
 import { DomSnapshot, resolveLocator } from '../../src/core/locator-resolver.js';
 
 describe('resolveLocator', () => {
+  it('keeps learned search inputs separate by Planner context', () => {
+    const snapshot: DomSnapshot = {
+      url: 'https://example.com/to-chuc',
+      afterStep: 'guided searchable dropdowns',
+      elements: [{
+        tag: 'input',
+        learnedStepType: 'fill',
+        learnedTarget: 'thanh tìm kiếm',
+        learnedContext: 'Tôn giáo',
+        learnedLocator: "page.locator('#religion-search')",
+        selector: '#religion-search',
+        isVisible: true,
+      }, {
+        tag: 'input',
+        learnedStepType: 'fill',
+        learnedTarget: 'thanh tìm kiếm',
+        learnedContext: 'Trụ sở chính',
+        learnedLocator: "page.locator('#head-office-search')",
+        selector: '#head-office-search',
+        isVisible: true,
+      }],
+    };
+
+    expect(resolveLocator('fill', 'thanh tìm kiếm', snapshot, 'Trụ sở chính')).toMatchObject({
+      locator: "page.locator('#head-office-search')",
+      matchedBy: 'guided_learning',
+    });
+  });
+
   it('uses a locator verified by the crawler before heuristic matching', () => {
     const snapshot: DomSnapshot = {
       url: 'https://example.com/to-chuc',

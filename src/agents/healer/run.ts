@@ -3,8 +3,9 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { buildCompactDomReport, runLive } from "../crawler/live-runner.js";
 import { runGenerator } from "../generator/run.js";
+import { loadStructuredE2EPlan } from "../planner/run.js";
+import { plannerPlanToTestCases } from "../planner/schema.js";
 import { buildActionPlan } from "../../core/action-plan.js";
-import { parseScript, validateParsedScript } from "../../core/step-parser.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -45,15 +46,19 @@ async function recoverVerifiedE2E(errorLog: string): Promise<{
   ok: boolean;
   reason: string;
 }> {
-  const sourcePath = 'artifacts/source-script-e2e.md';
-  if (!fs.existsSync(sourcePath)) {
-    return { ok: false, reason: 'MISSING_SOURCE_SCRIPT' };
+  const planPath = 'artifacts/test-plan-e2e.json';
+  if (!fs.existsSync(planPath)) {
+    return { ok: false, reason: 'MISSING_STRUCTURED_PLAN' };
   }
 
-  const parsedCases = parseScript(fs.readFileSync(sourcePath, 'utf-8'));
-  const parserIssues = validateParsedScript(parsedCases);
-  if (parsedCases.length === 0 || parserIssues.length > 0) {
-    return { ok: false, reason: 'SOURCE_SCRIPT_NOT_FULLY_PARSED' };
+  let parsedCases: ReturnType<typeof plannerPlanToTestCases>;
+  try {
+    parsedCases = plannerPlanToTestCases(loadStructuredE2EPlan(planPath));
+  } catch {
+    return { ok: false, reason: 'STRUCTURED_PLAN_INVALID' };
+  }
+  if (parsedCases.length === 0) {
+    return { ok: false, reason: 'STRUCTURED_PLAN_HAS_NO_TEST_CASES' };
   }
 
   const snapshotsMap = await runLive(parsedCases);

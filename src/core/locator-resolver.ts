@@ -20,6 +20,7 @@ export interface ElementInfo {
   selector?: string;
   learnedStepType?: string;
   learnedTarget?: string;
+  learnedContext?: string;
   learnedLocator?: string;
   isVisible: boolean;
 }
@@ -227,15 +228,18 @@ function findIconElement(target: string, elements: ElementInfo[]): ElementInfo |
 export function resolveLocator(
   stepType: string,
   stepTarget: string,
-  dom?: DomSnapshot
+  dom?: DomSnapshot,
+  stepContext?: string,
 ): ResolvedLocator {
   const target = normalizeText(stepTarget);
+  const context = normalizeText(stepContext || '');
   const elements = dom?.elements || [];
 
   const guidedBinding = elements.find(element =>
     element.isVisible &&
     element.learnedStepType === stepType &&
     normalizeText(element.learnedTarget || '') === target &&
+    (!element.learnedContext || normalizeText(element.learnedContext) === context) &&
     Boolean(element.learnedLocator),
   );
   if (guidedBinding?.learnedLocator) {

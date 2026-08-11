@@ -65,3 +65,13 @@ npm start
 ├── setup.bat             # File cài đặt tự động cho Windows
 └── setup.sh              # File cài đặt tự động cho macOS/Linux
 ```
+
+## Luồng E2E hiện tại
+
+1. **Planner** đọc trực tiếp kịch bản tiếng Việt, tách câu ghép thành Action Intent nguyên tử và ghi `artifacts/test-plan-e2e.json`. File Markdown cùng tên chỉ là bản trình bày được dựng tự động từ JSON.
+2. **Validator của Planner** chặn test case/bước/dữ liệu không có trong kịch bản, bước mơ hồ và mọi locator do AI tự tạo. Kịch bản lớn được chia theo `TC_...` để tránh vượt giới hạn token rồi mới hợp nhất.
+3. **Live Crawler** chạy các Action Intent trên website thật. Locator tự xác minh được lưu vào Action Plan; trường hợp chưa biết mới yêu cầu tester chọn mẫu và ghi nhớ nội bộ trong `.testkit/crawler-locators.json`.
+4. **Generator** chỉ sinh Playwright từ `artifacts/action-plan.json` đã xác minh. Nó không được thay locator hoặc đổi Expected Result.
+5. **Healer** khi test lỗi sẽ replay lại `test-plan-e2e.json`, crawl trạng thái thật và chỉ sửa phần kỹ thuật nếu vẫn giữ nguyên kết quả mong đợi.
+
+`source-script-e2e.md` là đầu vào gốc để đối chiếu; `test-plan-e2e.json` là dữ liệu chuẩn cho máy; `test-plan-e2e.md` là bản dễ đọc cho tester; `crawled-dom.md` là catalog DOM rút gọn; `action-plan.json` là hợp đồng cuối giữa Crawler và Generator.

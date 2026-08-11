@@ -1,6 +1,10 @@
 import fs from 'fs';
 import path from 'path';
-import { ParsedAssertion, ParsedTestCase, ParsedStep, parseAssertions } from './step-parser.js';
+import type {
+  ParsedAssertion,
+  ParsedTestCase,
+  ParsedStep,
+} from '../agents/planner/schema.js';
 import { DomSnapshot, ResolvedLocator, resolveLocator } from './locator-resolver.js';
 
 export interface ResolvedAction {
@@ -51,14 +55,14 @@ function resolveWithSharedEvidence(
   pageUrl: string,
   sharedSnapshots: DomSnapshot[],
 ): ResolvedLocator {
-  let best = resolveLocator(step.type, step.target || '', currentSnapshot);
+  let best = resolveLocator(step.type, step.target || '', currentSnapshot, step.context);
   if (best.confidence !== 'low') return best;
 
   const expectedUrl = normalizedPageUrl(currentSnapshot?.url || pageUrl);
   for (const snapshot of sharedSnapshots) {
     if (expectedUrl && normalizedPageUrl(snapshot.url) !== expectedUrl) continue;
 
-    const candidate = resolveLocator(step.type, step.target || '', snapshot);
+    const candidate = resolveLocator(step.type, step.target || '', snapshot, step.context);
     if (confidenceRank(candidate.confidence) > confidenceRank(best.confidence)) {
       best = candidate;
     }
@@ -159,7 +163,7 @@ export function buildActionPlan(
             break;
           }
 
-          const optionRes = resolveLocator('option', step.value || '', duringSnapshot);
+          const optionRes = resolveLocator('option', step.value || '', duringSnapshot, step.target);
           playwrightCode = `await ${triggerRes.locator}.click();\nawait ${optionRes.locator}.click();`;
           confidence = triggerRes.confidence === 'low' || optionRes.confidence === 'low'
             ? 'low'
@@ -173,7 +177,7 @@ export function buildActionPlan(
         case 'check': {
           const assertions = step.assertions?.length
             ? step.assertions
-            : parseAssertions(step.assertion || '');
+            : [{ kind: 'unknown' as const, value: step.assertion || step.raw }];
           const compiled = assertions.map(compileAssertion);
           playwrightCode = compiled.map(result => result.code).join('\n');
           confidence = compiled.some(result => result.confidence === 'low') ? 'low' : 'high';
@@ -183,6 +187,12 @@ export function buildActionPlan(
 
         case 'wait':
           playwrightCode = `await page.waitForLoadState('domcontentloaded');`;
+          break;
+
+        case 'noop':
+          playwrightCode = '';
+          confidence = 'high';
+          matchedBy = 'planner_noop';
           break;
       }
 
@@ -195,7 +205,9 @@ export function buildActionPlan(
         matchedBy,
         verifiedSelector,
         assertions: step.type === 'check'
-          ? (step.assertions?.length ? step.assertions : parseAssertions(step.assertion || ''))
+          ? (step.assertions?.length
+              ? step.assertions
+              : [{ kind: 'unknown' as const, value: step.assertion || step.raw }])
           : undefined,
       });
     });

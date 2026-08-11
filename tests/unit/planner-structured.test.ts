@@ -256,4 +256,37 @@ describe('AI Planner structured contract', () => {
     expect(chunks[1]).toContain('URL: https://example.com');
     expect(chunks[1]).toContain('TC_02: Hai');
   });
+
+  it('splits a short but step-heavy suite before Planner output can be truncated', () => {
+    const testCase = (id: string) => [
+      `${id}: Kịch bản nhiều bước`,
+      ...Array.from({ length: 8 }, (_, index) => `- Bấm nút '${id}-${index + 1}'`),
+    ].join('\n');
+    const script = [testCase('TC_01'), testCase('TC_02'), testCase('TC_03')].join('\n');
+
+    const chunks = splitE2EScript(script, 10_000, 14);
+
+    expect(chunks).toHaveLength(3);
+    expect(chunks[0]).toContain('TC_01:');
+    expect(chunks[0]).not.toContain('TC_02:');
+    expect(chunks[1]).toContain('TC_02:');
+    expect(chunks[2]).toContain('TC_03:');
+  });
+
+  it('splits one oversized test case without dropping or duplicating source steps', () => {
+    const sourceSteps = Array.from(
+      { length: 31 },
+      (_, index) => `- Bấm nút 'Bước ${index + 1}'`,
+    );
+    const script = ['TC_01: Kịch bản rất dài', ...sourceSteps].join('\n');
+
+    const chunks = splitE2EScript(script, 10_000, 14);
+    const emittedSteps = chunks.flatMap(chunk =>
+      chunk.split('\n').filter(line => line.startsWith('- ')),
+    );
+
+    expect(chunks).toHaveLength(3);
+    expect(chunks.every(chunk => chunk.includes('TC_01: Kịch bản rất dài'))).toBe(true);
+    expect(emittedSteps).toEqual(sourceSteps);
+  });
 });

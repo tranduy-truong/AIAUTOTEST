@@ -16,6 +16,8 @@ const E2E_MARKDOWN_PATH = 'artifacts/test-plan-e2e.md';
 const E2E_INVALID_PATH = 'artifacts/test-plan-e2e.invalid.txt';
 const E2E_ERRORS_PATH = 'artifacts/planner-validation-errors.json';
 const MAX_E2E_CHUNK_CHARS = 4500;
+const MAX_E2E_CHUNK_STEPS = 14;
+const STEP_BULLET = /^\s*[-*•·▪◦–—]\s*/u;
 
 function parseJsonArray(rawOutput: string): unknown[] | null {
   const withoutFence = rawOutput
@@ -67,7 +69,6 @@ function createTask(systemPrompt: string, sourceScript: string): string {
 
 function createRepairTask(
   task: string,
-  rawOutput: string,
   issues: PlannerValidationIssue[],
 ): string {
   const compactIssues = issues.slice(0, 30).map(issue => ({
@@ -77,12 +78,16 @@ function createRepairTask(
     sourceLine: issue.sourceLine,
     message: issue.message,
   }));
-  return `${task}\n\n[OUTPUT TRƯỚC KHÔNG ĐẠT HỢP ĐỒNG]\n${rawOutput}\n\n[LỖI CẦN SỬA]\n${JSON.stringify(compactIssues)}\n\nSửa toàn bộ lỗi và chỉ trả về JSON object hoàn chỉnh.`;
+  // Regenerate from the source instead of attaching the entire broken JSON.
+  // A truncated 3,500-token output would otherwise make the repair request
+  // even larger and can exceed Groq TPM before the model gets a second chance.
+  return `${task}\n\n[LỖI CẦN TRÁNH KHI TẠO LẠI OUTPUT]\n${JSON.stringify(compactIssues)}\n\nTạo lại toàn bộ JSON từ kịch bản gốc, sửa mọi lỗi trên và chỉ trả về JSON object hoàn chỉnh.`;
 }
 
 export function splitE2EScript(
   sourceScript: string,
   maxChars = MAX_E2E_CHUNK_CHARS,
+  maxSteps = MAX_E2E_CHUNK_STEPS,
 ): string[] {
   const lines = sourceScript.replace(/\r/g, '').split('\n');
   const preamble: string[] = [];
@@ -101,33 +106,53 @@ export function splitE2EScript(
   }
   if (blocks.length === 0) return [sourceScript.trim()];
 
-  const units: string[] = [];
+  const units: { text: string; id: string; steps: number }[] = [];
   for (const block of blocks) {
     const header = block[0];
-    let unit = header;
+    const id = header.match(/^\s*(TC(?:_[A-Z0-9]+)+)/i)?.[1].toUpperCase() || header;
+    let unitLines = [header];
+    let unitSteps = 0;
     for (const line of block.slice(1)) {
-      if (`${preamble.join('\n')}\n${unit}\n${line}`.length > maxChars && unit !== header) {
-        units.push(unit);
-        unit = `${header}\n${line}`;
-      } else {
-        unit += `\n${line}`;
+      const addsStep = STEP_BULLET.test(line) ? 1 : 0;
+      const candidate = [...unitLines, line].join('\n');
+      const exceedsChars = `${preamble.join('\n')}\n${candidate}`.length > maxChars;
+      const exceedsSteps = unitSteps + addsStep > maxSteps;
+      if ((exceedsChars || exceedsSteps) && unitLines.length > 1) {
+        units.push({ text: unitLines.join('\n'), id, steps: unitSteps });
+        unitLines = [header];
+        unitSteps = 0;
       }
+      unitLines.push(line);
+      unitSteps += addsStep;
     }
-    units.push(unit);
+    units.push({ text: unitLines.join('\n'), id, steps: unitSteps });
   }
 
   const chunks: string[] = [];
-  let chunk = preamble.join('\n').trim();
+  const preambleText = preamble.join('\n').trim();
+  let chunkUnits: typeof units = [];
+  let chunkSteps = 0;
   for (const unit of units) {
-    const candidate = [chunk, unit].filter(Boolean).join('\n');
-    if (candidate.length > maxChars && chunk && chunk !== preamble.join('\n').trim()) {
-      chunks.push(chunk.trim());
-      chunk = [preamble.join('\n').trim(), unit].filter(Boolean).join('\n');
-    } else {
-      chunk = candidate;
+    const candidateUnits = [...chunkUnits, unit];
+    const candidate = [preambleText, ...candidateUnits.map(item => item.text)]
+      .filter(Boolean)
+      .join('\n');
+    const repeatsSameTestCase = chunkUnits.some(item => item.id === unit.id);
+    if (
+      chunkUnits.length > 0 &&
+      (candidate.length > maxChars || chunkSteps + unit.steps > maxSteps || repeatsSameTestCase)
+    ) {
+      chunks.push([preambleText, ...chunkUnits.map(item => item.text)].filter(Boolean).join('\n').trim());
+      chunkUnits = [unit];
+      chunkSteps = unit.steps;
+      continue;
     }
+    chunkUnits = candidateUnits;
+    chunkSteps += unit.steps;
   }
-  if (chunk.trim()) chunks.push(chunk.trim());
+  if (chunkUnits.length > 0) {
+    chunks.push([preambleText, ...chunkUnits.map(item => item.text)].filter(Boolean).join('\n').trim());
+  }
   return chunks;
 }
 
@@ -199,7 +224,7 @@ async function planOneChunk(
   if (!validation.plan || validation.issues.length > 0) {
     console.warn(`   Lo ${chunkIndex}: output chua dat hop dong (${validation.issues.length} loi), dang tu sua mot lan...`);
     const repair = await callPlannerAdapter(
-      createRepairTask(task, result.rawOutput, validation.issues),
+      createRepairTask(task, validation.issues),
       `_chunk_${chunkIndex}_repair`,
     );
     if (repair.ok) {
@@ -226,7 +251,7 @@ async function runStructuredE2EPlanner(
   }
   const chunks = splitE2EScript(sourceScript);
   if (chunks.length > 1) {
-    console.log(`   Kịch bản lớn được chia thành ${chunks.length} lô theo test case để không vượt giới hạn TPM.`);
+    console.log(`   Kịch bản được chia thành ${chunks.length} lô theo số bước/test case để tránh JSON bị cắt và vượt TPM.`);
   }
 
   const chunkPlans: StructuredE2EPlan[] = [];

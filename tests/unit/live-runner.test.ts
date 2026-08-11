@@ -12,7 +12,7 @@ import {
   nextStateStep,
   protectedGotoAfterLogin,
 } from '../../src/agents/crawler/live-runner.js';
-import type { ParsedStep } from '../../src/core/step-parser.js';
+import type { ParsedStep } from '../../src/agents/planner/schema.js';
 
 describe('browser snapshot script', () => {
   it('executes without relying on tsx helpers such as __name', () => {

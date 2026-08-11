@@ -18,6 +18,7 @@ node_modules
 /artifacts/action-plan.json
 /artifacts/crawler-failures.json
 /artifacts/unresolved-actions.json
+/artifacts/planner-validation-errors.json
 /artifacts/locator-registry.json
 /artifacts/report.md
 /screenshots/

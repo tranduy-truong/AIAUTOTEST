@@ -159,6 +159,8 @@ function compactStructuredPlannerPlan(rawPlan: string): string {
           target: step.target,
           value: step.value,
           url: step.url,
+          context: step.context,
+          sourceLine: step.sourceLine,
           assertions: step.assertions,
         })),
       })),

@@ -1,9 +1,31 @@
 import { describe, expect, it } from 'vitest';
 import { buildActionPlan } from '../../src/core/action-plan.js';
 import type { DomSnapshot } from '../../src/core/locator-resolver.js';
-import type { ParsedTestCase } from '../../src/core/step-parser.js';
+import type { ParsedTestCase } from '../../src/agents/planner/schema.js';
 
 describe('buildActionPlan', () => {
+  it('keeps an explicit no-op step without asking the Crawler for a locator', () => {
+    const testCase: ParsedTestCase = {
+      id: 'TC_01',
+      name: 'Giữ trống tên quốc tế',
+      unparsedSteps: [],
+      steps: [{
+        type: 'noop',
+        target: 'Tên quốc tế',
+        raw: '- Tên quốc tế bỏ trống',
+      }],
+    };
+
+    const plan = buildActionPlan([testCase], new Map(), { persist: false });
+
+    expect(plan.testCases[0].actions[0]).toMatchObject({
+      type: 'noop',
+      playwrightCode: '',
+      confidence: 'high',
+      matchedBy: 'planner_noop',
+    });
+  });
+
   it('binds a password-toggle step to the selector verified before that step', () => {
     const testCase: ParsedTestCase = {
       id: 'TC_08',

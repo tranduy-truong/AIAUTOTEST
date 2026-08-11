@@ -4,10 +4,10 @@ import fs from "fs";
 import path from "path";
 import { TestPolicyHarness } from "./harness/policy.js";
 
-import { runPlanner } from "./agents/planner/run.js";
+import { loadStructuredE2EPlan, runPlanner } from "./agents/planner/run.js";
 import { runGenerator } from "./agents/generator/run.js";
 import { runHealer } from "./agents/healer/run.js";
-import { parseScript, validateParsedScript } from "./core/step-parser.js";
+import { plannerPlanToTestCases } from "./agents/planner/schema.js";
 import { buildActionPlan } from "./core/action-plan.js";
 import { buildCompactDomReport, runLive } from "./agents/crawler/live-runner.js";
 
@@ -98,13 +98,15 @@ async function handlePlanAndGenerate() {
 
   // Cấp Context (Dữ liệu đầu vào) tùy theo tầng
   let contextData = "";
+  let plannerCompleted = false;
   if (level === "e2e") {
     console.log(`
 -----------------------------------------------------------------
 NHAP KICH BAN TEST
 
 Viet tung test case bang tieng Viet, AI se dich sang code.
-Moi dong la 1 buoc, AI chuyen doi 1:1 sang Playwright.
+Co the viet cau tu nhien gom nhieu thao tac; Planner se tach theo dung thu tu.
+Neu cau mo ho, he thong se yeu cau lam ro thay vi doan.
 
 Vi du:
   URL: https://staging.example.com/login
@@ -126,30 +128,23 @@ Vi du:
       },
     ]);
 
-    // === CRAWLER: Live Multi-State Crawler (vấn đáp DOM nhiều lần theo từng trạng thái) ===
-    console.log("\n[Crawler Agent] Dang khoi chay Live Crawler de van dap DOM theo tung trang thai...");
+    if (!fs.existsSync("artifacts")) fs.mkdirSync("artifacts");
+    fs.writeFileSync("artifacts/source-script-e2e.md", scriptContent.trim() + "\n");
+
+    // Planner là tầng hiểu tiếng Việt duy nhất. JSON đã qua validator mới được
+    // chuyển cho Crawler; không còn parse lại bằng regex ở CLI.
+    const plannerSuccess = await runPlanner("e2e", scriptContent);
+    if (!plannerSuccess) {
+      console.error("   Da dung truoc Crawler/Generator vi Planner chua tao duoc Action Intent an toan.");
+      await returnToMenu();
+      return;
+    }
+    plannerCompleted = true;
+
+    // === CRAWLER: Live Multi-State Crawler (xác minh DOM theo Action Intent) ===
+    console.log("\n[Crawler Agent] Dang khoi chay Live Crawler de xac minh Action Intent tren DOM that...");
     try {
-      const parsedCases = parseScript(scriptContent);
-      if (parsedCases.length === 0) {
-        throw new Error("Khong tim thay test case nao trong kich ban");
-      }
-
-      const parserIssues = validateParsedScript(parsedCases);
-      if (parserIssues.length > 0) {
-        if (!fs.existsSync("artifacts")) fs.mkdirSync("artifacts");
-        fs.writeFileSync(
-          "artifacts/parser-errors.json",
-          JSON.stringify(parserIssues, null, 2) + "\n",
-        );
-        throw new Error(
-          `Parser chua hieu ${parserIssues.length} buoc: ${parserIssues
-            .map(issue => `${issue.testCaseId}: ${issue.step}`)
-            .join(" | ")}`,
-        );
-      }
-
-      if (!fs.existsSync("artifacts")) fs.mkdirSync("artifacts");
-      fs.writeFileSync("artifacts/source-script-e2e.md", scriptContent.trim() + "\n");
+      const parsedCases = plannerPlanToTestCases(loadStructuredE2EPlan());
       const snapshotsMap = await runLive(parsedCases);
 
       const totalSnapshots = [...snapshotsMap.values()]
@@ -197,18 +192,12 @@ Vi du:
       console.log(`   Da van dap va thu thap ${totalSnapshots} DOM snapshot(s) theo tung trang thai.`);
     } catch (err) {
       console.error(`   Loi hop dong E2E: ${err.message}`);
-      console.error("   Da dung truoc Planner/Generator de tranh sinh test doan mo.");
+      console.error("   Planner Plan van duoc giu lai; Generator dung de tranh sinh locator doan mo.");
+      await returnToMenu();
       return;
     }
 
-    contextData = `[CHẾ ĐỘ KỊCH BẢN CHI TIẾT - SCRIPT MODE]
-QUAN TRỌNG: Người dùng đã viết kịch bản test CHI TIẾT TỪNG BƯỚC. 
-Planner PHẢI giữ CHÍNH XÁC 1:1 từng bước trong Test Plan.
-TUYỆT ĐỐI KHÔNG được tự thêm, bớt hoặc thay đổi bất kỳ bước nào.
-
-=== KỊCH BẢN TEST CỦA NGƯỜI DÙNG ===
-${scriptContent}
-=== HẾT KỊCH BẢN ===`;
+    contextData = scriptContent;
 
   } else if (level === "integration") {
     const { apiDesc } = await inquirer.prompt([
@@ -236,7 +225,7 @@ ${scriptContent}
   }
 
   // Bước 1: Gọi Planner
-  const isPlanSuccess = await runPlanner(level, contextData);
+  const isPlanSuccess = plannerCompleted || await runPlanner(level, contextData);
 
   if (isPlanSuccess) {
     const { confirmGen } = await inquirer.prompt([

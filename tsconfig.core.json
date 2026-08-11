@@ -13,10 +13,13 @@
     "src/agents/generator/run.ts",
     "src/agents/healer/run.ts",
     "src/agents/planner/run.ts",
+    "src/agents/planner/schema.ts",
+    "src/agents/planner/normalizer.ts",
+    "src/agents/planner/validator.ts",
+    "src/agents/planner/markdown-renderer.ts",
     "src/core/action-plan.ts",
     "src/agents/crawler/locator-registry.ts",
     "src/core/locator-resolver.ts",
-    "src/core/step-parser.ts",
     "tests/unit/**/*.ts"
   ]
 }

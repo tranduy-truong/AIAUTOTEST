@@ -75,3 +75,46 @@ npm start
 5. **Healer** khi test lỗi sẽ replay lại `test-plan-e2e.json`, crawl trạng thái thật và chỉ sửa phần kỹ thuật nếu vẫn giữ nguyên kết quả mong đợi.
 
 `source-script-e2e.md` là đầu vào gốc để đối chiếu; `test-plan-e2e.json` là dữ liệu chuẩn cho máy; `test-plan-e2e.md` là bản dễ đọc cho tester; `crawled-dom.md` là catalog DOM rút gọn; `action-plan.json` là hợp đồng cuối giữa Crawler và Generator.
+
+## Luồng Unit Test Whitebox
+
+Kiến trúc công khai vẫn là **Planner → Generator → Healer**. Code Reader, Branch Analyzer và Dependency Resolver nằm trong `src/core/unit/`, là công cụ nội bộ của Planner chứ không phải agent thứ tư.
+
+### Phạm vi phiên bản hiện tại
+
+- Dự án JavaScript/TypeScript đã cấu hình Vitest hoặc Jest.
+- Hàm, arrow function và class được `export`.
+- Phân tích `if/else`, ternary, `switch`, `catch` và vòng lặp bằng TypeScript AST.
+- Phân loại dependency database/API/filesystem/time để Generator mock đúng ranh giới.
+- Test sinh tại `<du-an-dich>/tests/unit/ai-generated/` và luôn import source thật.
+- Healer Unit chạy theo chính sách `diagnose-only`: không đổi expected, không sửa source sản phẩm và không skip test.
+
+### Cách dùng
+
+1. Chạy `npm start`.
+2. Chọn `AI Lên kế hoạch & Sinh Code Test` → `Unit`.
+3. Chọn thư mục dự án, một file nguồn hoặc dán một đoạn code có `export`.
+4. Chọn hàm/class cần test và nhập requirement nếu có.
+5. Planner lập kế hoạch cho từng target; Generator chỉ chạy khi JSON vượt qua validator.
+6. Chọn `Chạy kiểm thử Unit Test` ở menu để chạy các file gần nhất trong đúng thư mục dự án đích.
+
+TestKit không tự cài Vitest/Jest và không gửi `.env`, secret key, test cũ, `node_modules`, `dist`, `build` hoặc `coverage` vào AI. Nếu dự án chưa có test runner, hệ thống dừng và yêu cầu cấu hình rõ ràng.
+
+### Artifact của mỗi lần chạy
+
+```text
+artifacts/unit/<project>/<yyyyMMdd_HHmmss_SSS>/
+├── project-manifest.json
+├── code-index.json
+├── branch-map.json
+├── dependency-map.json
+├── context-bundle.json
+├── test-plan-unit.json
+├── test-plan-unit.md
+├── generation-manifest.json
+├── test-results.json
+├── coverage-gaps.json
+└── healer-diagnosis.json
+```
+
+JSON là hợp đồng cho chương trình; Markdown là bản trình bày để tester đọc. `sourceHash` chặn Generator nếu file nguồn đã thay đổi sau khi Planner lập kế hoạch.

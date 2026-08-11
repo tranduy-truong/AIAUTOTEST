@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { classifyFailure } from '../../src/agents/healer/run.js';
+import { classifyFailure, classifyUnitFailure } from '../../src/agents/healer/run.js';
 
 describe('Healer failure classification', () => {
   it('recognizes an unsplit natural-language assertion as a test script bug', () => {
@@ -55,5 +55,21 @@ describe('Healer failure classification', () => {
       recoveryAction: 'WAIT_FOR_OBSERVED_STATE',
       failedLine: 10,
     });
+  });
+});
+
+describe('Unit Healer diagnose-only policy', () => {
+  it('classifies assertion mismatch without allowing expected-result healing', () => {
+    const diagnosis = classifyUnitFailure(`AssertionError: expected 200000 to be 90000\n tests/unit/discount.test.ts:12:5`);
+    expect(diagnosis.reasonCode).toBe('IMPLEMENTATION_DIFFERS_FROM_PLANNED_ORACLE');
+    expect(diagnosis.canSelfHeal).toBe(false);
+    expect(diagnosis.preservesExpectedResult).toBe(true);
+    expect(diagnosis.recoveryAction).toBe('REPORT_ONLY');
+  });
+
+  it('identifies an unverified import or alias error', () => {
+    const diagnosis = classifyUnitFailure(`Error: Cannot find module '@/services/order' from tests/unit/order.test.ts`);
+    expect(diagnosis.reasonCode).toBe('IMPORT_OR_ALIAS_NOT_RESOLVED');
+    expect(diagnosis.canSelfHeal).toBe(false);
   });
 });

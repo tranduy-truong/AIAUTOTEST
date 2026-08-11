@@ -6,6 +6,7 @@ import { runGenerator } from "../generator/run.js";
 import { loadStructuredE2EPlan } from "../planner/run.js";
 import { plannerPlanToTestCases } from "../planner/schema.js";
 import { buildActionPlan } from "../../core/action-plan.js";
+import { loadUnitSession } from '../../core/unit/artifacts.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -32,9 +33,71 @@ export interface HealerDiagnosis {
 }
 
 function failedLineFromLog(errorLog: string): number | undefined {
-  const matches = [...errorLog.matchAll(/\.spec\.[jt]s:(\d+)(?::\d+)?/gi)];
+  const matches = [...errorLog.matchAll(/\.(?:spec|test)\.[jt]sx?:(\d+)(?::\d+)?/gi)];
   const last = matches.at(-1)?.[1];
   return last ? Number(last) : undefined;
+}
+
+export function classifyUnitFailure(errorLog: string): HealerDiagnosis {
+  const normalized = errorLog
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/đ/g, 'd');
+  const failedLine = failedLineFromLog(errorLog);
+
+  if (/cannot find module|failed to resolve import|module not found|err_module_not_found|cannot find package/.test(normalized)) {
+    return {
+      category: 'TEST_SCRIPT_BUG',
+      reasonCode: 'IMPORT_OR_ALIAS_NOT_RESOLVED',
+      confidence: 'high', canSelfHeal: false, preservesExpectedResult: true,
+      recoveryAction: 'REPORT_ONLY', failedLine,
+    };
+  }
+  if (/cannot access .* before initialization|mock factory|vi\.mock|jest\.mock|hoist/.test(normalized)) {
+    return {
+      category: 'TEST_SCRIPT_BUG',
+      reasonCode: 'MOCK_SETUP_OR_HOISTING_ERROR',
+      confidence: 'high', canSelfHeal: false, preservesExpectedResult: true,
+      recoveryAction: 'REPORT_ONLY', failedLine,
+    };
+  }
+  if (/no test files found|no tests found|test suite must contain at least one test/.test(normalized)) {
+    return {
+      category: 'TEST_SCRIPT_BUG',
+      reasonCode: 'TEST_DISCOVERY_CONFIGURATION_ERROR',
+      confidence: 'high', canSelfHeal: false, preservesExpectedResult: true,
+      recoveryAction: 'REPORT_ONLY', failedLine,
+    };
+  }
+  if (/timed out|timeout|exceeded timeout/.test(normalized)) {
+    return {
+      category: 'TIMING_OR_ASYNC',
+      reasonCode: 'UNIT_ASYNC_DID_NOT_SETTLE',
+      confidence: 'medium', canSelfHeal: false, preservesExpectedResult: true,
+      recoveryAction: 'REPORT_ONLY', failedLine,
+    };
+  }
+  if (/expected:|received:|assertionerror|expected .* to (?:be|equal|throw|match)/.test(normalized)) {
+    return {
+      category: 'ASSERTION_ERROR',
+      reasonCode: 'IMPLEMENTATION_DIFFERS_FROM_PLANNED_ORACLE',
+      confidence: 'high', canSelfHeal: false, preservesExpectedResult: true,
+      recoveryAction: 'REPORT_ONLY', failedLine,
+    };
+  }
+  if (/econnrefused|enotfound|network|database|connection refused/.test(normalized)) {
+    return {
+      category: 'TEST_DATA_ERROR',
+      reasonCode: 'UNMOCKED_EXTERNAL_DEPENDENCY',
+      confidence: 'medium', canSelfHeal: false, preservesExpectedResult: true,
+      recoveryAction: 'REPORT_ONLY', failedLine,
+    };
+  }
+  return {
+    category: 'UNKNOWN', reasonCode: 'UNIT_NEEDS_MORE_EVIDENCE', confidence: 'low',
+    canSelfHeal: false, preservesExpectedResult: true, recoveryAction: 'REPORT_ONLY', failedLine,
+  };
 }
 
 function targetNameFromLog(errorLog: string): string {
@@ -202,7 +265,7 @@ export async function runHealer(
     return false;
   }
 
-  const diagnosis = classifyFailure(errorLog);
+  const diagnosis = level === 'unit' ? classifyUnitFailure(errorLog) : classifyFailure(errorLog);
   if (!fs.existsSync('artifacts')) fs.mkdirSync('artifacts');
   fs.writeFileSync(
     'artifacts/healer-diagnosis.json',
@@ -212,6 +275,17 @@ export async function runHealer(
       ...diagnosis,
     }, null, 2) + '\n',
   );
+  if (level === 'unit') {
+    try {
+      const session = loadUnitSession();
+      fs.writeFileSync(
+        path.join(session.runDirectory, 'healer-diagnosis.json'),
+        JSON.stringify({ level, diagnosedAt: new Date().toISOString(), policy: 'diagnose-only', ...diagnosis }, null, 2) + '\n',
+      );
+    } catch {
+      // Global artifact above remains available when there is no Unit session.
+    }
+  }
   console.log(`   Phân loại: ${diagnosis.category} (${diagnosis.reasonCode})`);
   console.log(
     diagnosis.canSelfHeal

@@ -3,6 +3,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { OpenAIAdapter } from "../../adapters/openai.js";
 import type { ActionPlan, ResolvedAction } from "../../core/action-plan.js";
+import { runUnitGenerator } from './unit-generator.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const MAX_DOM_REPORT_CHARS = 8000;
@@ -203,6 +204,10 @@ export async function runGenerator(
     `\n👨‍💻 [Generator Agent] Đang sinh code kiểm thử cho tầng: ${level.toUpperCase()}`,
   );
 
+  if (level === 'unit') {
+    return runUnitGenerator();
+  }
+
   // 1. Kiểm tra kế hoạch từ file JSON
   const preferredPlanPath = level === 'e2e'
     ? 'artifacts/test-plan-e2e.md'
@@ -228,7 +233,7 @@ export async function runGenerator(
   // 2. Cấu hình Framework đích (Playwright hay Vitest)
   let framework = "";
   let fileExtension = "";
-  if (level === "unit" || level === "integration") {
+  if (level === "integration") {
     framework = "Vitest (import { describe, it, expect } from 'vitest')";
     fileExtension = ".test.ts";
   } else {

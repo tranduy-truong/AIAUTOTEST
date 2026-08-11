@@ -10,6 +10,8 @@ import { runHealer } from "./agents/healer/run.js";
 import { plannerPlanToTestCases } from "./agents/planner/schema.js";
 import { buildActionPlan } from "./core/action-plan.js";
 import { buildCompactDomReport, runLive } from "./agents/crawler/live-runner.js";
+import { analyzeUnitInput, createUnitSession } from "./core/unit/artifacts.js";
+import { runLastGeneratedUnitTests } from "./core/unit/runner.js";
 
 const harness = new TestPolicyHarness();
 
@@ -209,18 +211,121 @@ Vi du:
     ]);
     contextData = apiDesc;
   } else if (level === "unit") {
-    const { filePath } = await inquirer.prompt([
+    console.log(`
+-----------------------------------------------------------------
+UNIT TEST WHITEBOX
+
+Planner se doc AST, xac dinh branch/dependency va lap Test Plan.
+Generator chi duoc import source that; khong copy ham vao file test.
+-----------------------------------------------------------------
+    `);
+    const { inputMode } = await inquirer.prompt([
       {
-        type: "input",
-        name: "filePath",
-        message: "Nhập đường dẫn file code cần test (VD: src/lib/discount.ts):",
+        type: "list",
+        name: "inputMode",
+        message: "Bạn muốn cung cấp mã nguồn theo cách nào?",
+        choices: [
+          { name: "Chọn thư mục dự án", value: "folder" },
+          { name: "Chọn một file nguồn", value: "file" },
+          { name: "Dán đoạn code export để thử nhanh", value: "paste" },
+        ],
       },
     ]);
-    if (fs.existsSync(filePath)) {
-      contextData = fs.readFileSync(filePath, "utf-8"); // Đọc luôn code đưa cho AI
+    let unitInputPath = "";
+    if (inputMode === "paste") {
+      const { pastedCode } = await inquirer.prompt([
+        {
+          type: "editor",
+          name: "pastedCode",
+          message: "Dán code JavaScript/TypeScript (target phải có export):",
+        },
+      ]);
+      const snippetDir = path.join(process.cwd(), ".testkit", "unit-inputs", `snippet_${Date.now()}`);
+      fs.mkdirSync(snippetDir, { recursive: true });
+      unitInputPath = path.join(snippetDir, "snippet.ts");
+      fs.writeFileSync(unitInputPath, `${pastedCode.trim()}\n`);
     } else {
-      console.log("File không tồn tại, AI sẽ dùng đường dẫn dự đoán.");
-      contextData = filePath;
+      const { sourcePath } = await inquirer.prompt([
+        {
+          type: "input",
+          name: "sourcePath",
+          message: inputMode === "folder"
+            ? "Nhập đường dẫn thư mục gốc dự án cần test:"
+            : "Nhập đường dẫn file nguồn cần test:",
+          validate: value => value.trim() ? true : "Đường dẫn không được để trống.",
+        },
+      ]);
+      unitInputPath = path.resolve(sourcePath.trim());
+    }
+
+    let analysis;
+    try {
+      analysis = analyzeUnitInput(unitInputPath);
+    } catch (error) {
+      console.error(`❌ Code Reader không thể phân tích: ${error.message}`);
+      await returnToMenu();
+      return;
+    }
+    const eligibleTargets = analysis.index.targets.filter(target => target.executionMode !== "UNSUPPORTED");
+    if (eligibleTargets.length === 0) {
+      console.error("❌ Không tìm thấy hàm/class được export để sinh Unit Test.");
+      console.error("   Target phải dùng export để test có thể import source thật.");
+      await returnToMenu();
+      return;
+    }
+    console.log(`   Code Reader: ${analysis.manifest.sourceFiles.length} file, ${analysis.index.targets.length} target, ${eligibleTargets.length} target có thể test.`);
+    console.log(`   Framework phát hiện: ${analysis.manifest.testFramework}`);
+    if (analysis.manifest.testFramework === "unknown") {
+      console.error("❌ Dự án chưa cấu hình Vitest hoặc Jest. Hệ thống không tự đoán/cài framework.");
+      await returnToMenu();
+      return;
+    }
+
+    let selectedTargetIds = eligibleTargets.map(target => target.id);
+    if (eligibleTargets.length > 1) {
+      const { selectionMode } = await inquirer.prompt([
+        {
+          type: "list",
+          name: "selectionMode",
+          message: "Chọn phạm vi Planner Unit:",
+          choices: [
+            { name: "Chọn hàm/class cụ thể (khuyến nghị)", value: "choose" },
+            { name: `Phân tích tất cả ${eligibleTargets.length} target`, value: "all" },
+          ],
+        },
+      ]);
+      if (selectionMode === "choose") {
+        const { selected } = await inquirer.prompt([
+          {
+            type: "checkbox",
+            name: "selected",
+            message: "Chọn target cần sinh test:",
+            pageSize: 20,
+            choices: eligibleTargets.map(target => ({
+              name: `${target.sourceFile} → ${target.symbol} [${target.executionMode}]`,
+              value: target.id,
+            })),
+            validate: value => value.length > 0 ? true : "Phải chọn ít nhất một target.",
+          },
+        ]);
+        selectedTargetIds = selected;
+      }
+    }
+    const { requirements } = await inquirer.prompt([
+      {
+        type: "input",
+        name: "requirements",
+        message: "Yêu cầu nghiệp vụ/expected bổ sung (có thể để trống, không nhập secret):",
+      },
+    ]);
+    try {
+      const prepared = createUnitSession(analysis, selectedTargetIds, requirements);
+      contextData = JSON.stringify(prepared.context);
+      console.log(`   Đã tạo Unit Context: ${prepared.session.contextPath}`);
+    } catch (error) {
+      console.error(`❌ Không tạo được Unit Context: ${error.message}`);
+      await returnToMenu();
+      return;
     }
   }
 
@@ -282,12 +387,41 @@ async function runTests(level) {
     `\nĐang khởi chạy bộ kiểm thử cấp độ [${level.toUpperCase()}]...`,
   );
 
+  if (level === "unit") {
+    let unitResult;
+    try {
+      unitResult = runLastGeneratedUnitTests();
+    } catch (error) {
+      console.error(`❌ Không thể chạy Unit Test gần nhất: ${error.message}`);
+      await returnToMenu();
+      return;
+    }
+    console.log(`   Dự án đích: ${unitResult.cwd}`);
+    console.log(`   Lệnh: ${unitResult.command.join(" ") || "không có"}`);
+    if (unitResult.stdout) console.log(unitResult.stdout);
+    if (unitResult.stderr) console.error(unitResult.stderr);
+    if (unitResult.ok) {
+      console.log("\nTất cả Unit Test đã pass thành công!");
+      console.log(unitResult.coverageEnabled
+        ? "Coverage đã được bật và lưu trong dự án đích."
+        : "Test pass nhưng chưa đo coverage vì dự án đích chưa có coverage provider.");
+    } else {
+      const errorMessage = `${unitResult.stdout}\n${unitResult.stderr}`.trim();
+      console.log("\nUnit Test failed. Healer chỉ chẩn đoán, không tự đổi Expected Result.");
+      await runHealer("unit", errorMessage);
+      const result = await harness.handleTestFailure("unit", "Generated Unit Suite", errorMessage);
+      fs.mkdirSync("artifacts", { recursive: true });
+      fs.writeFileSync("artifacts/report.md", result.report);
+    }
+    await returnToMenu();
+    return;
+  }
+
   // Xác định lệnh chạy theo tầng
   let command = "";
   if (level === "e2e") command = "npx playwright test tests/e2e";
   else if (level === "integration")
     command = "npx vitest run tests/integration";
-  else if (level === "unit") command = "npx vitest run tests/unit";
 
   try {
     const output = execSync(command, { encoding: "utf-8" });

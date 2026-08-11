@@ -9,6 +9,20 @@ import {
   validateStructuredE2EPlan,
   type PlannerValidationIssue,
 } from './validator.js';
+import {
+  loadUnitSession,
+  saveUnitPlan,
+} from '../../core/unit/artifacts.js';
+import { renderUnitPlanMarkdown } from '../../core/unit/markdown-renderer.js';
+import {
+  parseStructuredUnitPlan,
+  validateStructuredUnitPlan,
+  type UnitPlanValidationIssue,
+} from '../../core/unit/plan-validator.js';
+import type {
+  StructuredUnitPlan,
+  UnitContextBundle,
+} from '../../core/unit/schema.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const E2E_JSON_PATH = 'artifacts/test-plan-e2e.json';
@@ -295,6 +309,147 @@ async function runStructuredE2EPlanner(
   return true;
 }
 
+function createUnitTask(
+  systemPrompt: string,
+  context: UnitContextBundle,
+): string {
+  return `${systemPrompt}\n\n---\n\n[UNIT CONTEXT ĐÃ ĐƯỢC CODE READER XÁC MINH]\n${JSON.stringify(context)}\n\n[HẾT CONTEXT]\n\nChỉ xuất JSON object đúng schema. Không thêm markdown.`;
+}
+
+function unitContextForAI(context: UnitContextBundle): UnitContextBundle {
+  return {
+    ...context,
+    project: {
+      ...context.project,
+      projectRoot: '<PROJECT_ROOT>',
+    },
+  };
+}
+
+function createUnitRepairTask(
+  task: string,
+  issues: UnitPlanValidationIssue[],
+): string {
+  const compact = issues.slice(0, 40).map(issue => ({
+    code: issue.code,
+    target: issue.target,
+    testCaseId: issue.testCaseId,
+    message: issue.message,
+  }));
+  return `${task}\n\n[LỖI HỢP ĐỒNG CẦN SỬA]\n${JSON.stringify(compact)}\n\nTạo lại JSON hoàn chỉnh từ Unit Context. Cấm bịa target, branch, dependency hoặc sourceHash.`;
+}
+
+async function planOneUnitTarget(
+  systemPrompt: string,
+  context: UnitContextBundle,
+  index: number,
+): Promise<{ plan: StructuredUnitPlan | null; issues: UnitPlanValidationIssue[]; rawOutput: string }> {
+  const aiContext = unitContextForAI(context);
+  const task = createUnitTask(systemPrompt, aiContext);
+  let result = await callPlannerAdapter(task, `_unit_${index}`);
+  if (!result.ok) {
+    return {
+      plan: null,
+      issues: [{ code: 'AI_API_ERROR', message: result.rawOutput }],
+      rawOutput: result.rawOutput,
+    };
+  }
+
+  let plan = parseStructuredUnitPlan(result.rawOutput);
+  let issues: UnitPlanValidationIssue[] = plan
+    ? validateStructuredUnitPlan(plan, aiContext)
+    : [{ code: 'INVALID_JSON', message: 'Planner không trả về Unit Plan JSON hợp lệ.' }];
+  if (!plan || issues.length > 0) {
+    console.warn(`   Target ${index}: Unit Plan chưa đạt hợp đồng (${issues.length} lỗi), đang tự sửa một lần...`);
+    const repair = await callPlannerAdapter(createUnitRepairTask(task, issues), `_unit_${index}_repair`);
+    if (repair.ok) {
+      result = repair;
+      plan = parseStructuredUnitPlan(result.rawOutput);
+      issues = plan
+        ? validateStructuredUnitPlan(plan, aiContext)
+        : [{ code: 'INVALID_JSON', message: 'Planner vẫn không trả về Unit Plan JSON hợp lệ.' }];
+    }
+  }
+  return { plan, issues, rawOutput: result.rawOutput };
+}
+
+async function runStructuredUnitPlanner(
+  systemPrompt: string,
+  contextData: string,
+): Promise<boolean> {
+  ensureArtifactsDir();
+  let context: UnitContextBundle;
+  try {
+    context = JSON.parse(contextData) as UnitContextBundle;
+    if (context.version !== 1 || !context.project || !Array.isArray(context.targets) || context.targets.length === 0) {
+      throw new Error('Context thiếu project hoặc target.');
+    }
+  } catch (error) {
+    console.error(`❌ Unit Context không hợp lệ: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    return false;
+  }
+
+  const plannedTargets: StructuredUnitPlan['targets'] = [];
+  const clarifications: string[] = [];
+  const allIssues: UnitPlanValidationIssue[] = [];
+  const rawOutputs: string[] = [];
+  for (let index = 0; index < context.targets.length; index++) {
+    const singleContext: UnitContextBundle = { ...context, targets: [context.targets[index]] };
+    console.log(`   Phân tích ${index + 1}/${context.targets.length}: ${context.targets[index].sourceFile}#${context.targets[index].symbol}`);
+    const result = await planOneUnitTarget(systemPrompt, singleContext, index + 1);
+    rawOutputs.push(result.rawOutput);
+    if (!result.plan || result.issues.length > 0) {
+      allIssues.push(...result.issues);
+      continue;
+    }
+    plannedTargets.push(...result.plan.targets);
+    clarifications.push(...result.plan.clarifications);
+  }
+
+  const session = loadUnitSession();
+  if (allIssues.length > 0 || plannedTargets.length !== context.targets.length) {
+    fs.writeFileSync(
+      path.join(session.runDirectory, 'planner-validation-errors.json'),
+      `${JSON.stringify(allIssues, null, 2)}\n`,
+    );
+    fs.writeFileSync(
+      path.join(session.runDirectory, 'test-plan-unit.invalid.txt'),
+      `${rawOutputs.join('\n\n--- TARGET OUTPUT ---\n\n')}\n`,
+    );
+    console.error(`❌ Planner Unit chưa đạt hợp đồng (${allIssues.length} lỗi). Generator đã được chặn.`);
+    console.error(`   Chi tiết: ${path.join(session.runDirectory, 'planner-validation-errors.json')}`);
+    return false;
+  }
+
+  const plan: StructuredUnitPlan = {
+    version: 1,
+    source: 'ai-planner',
+    project: {
+      name: context.project.projectName,
+      root: context.project.projectRoot,
+      testFramework: context.project.testFramework,
+    },
+    targets: plannedTargets,
+    clarifications: [...new Set(clarifications)],
+  };
+  const finalIssues = validateStructuredUnitPlan(plan, context);
+  if (finalIssues.length > 0) {
+    fs.writeFileSync(
+      path.join(session.runDirectory, 'planner-validation-errors.json'),
+      `${JSON.stringify(finalIssues, null, 2)}\n`,
+    );
+    console.error(`❌ Unit Plan hợp nhất không hợp lệ (${finalIssues.length} lỗi).`);
+    return false;
+  }
+
+  saveUnitPlan(plan, session);
+  const markdown = renderUnitPlanMarkdown(plan);
+  fs.writeFileSync(path.join(session.runDirectory, 'test-plan-unit.md'), markdown);
+  fs.writeFileSync('artifacts/test-plan-unit.md', markdown);
+  console.log(`✅ Đã lập xong Unit Plan! Lưu tại: ${session.planPath}`);
+  return true;
+}
+
 export async function runPlanner(
   level: 'unit' | 'integration' | 'e2e',
   contextData: string,
@@ -310,6 +465,9 @@ export async function runPlanner(
 
   if (level === 'e2e') {
     return runStructuredE2EPlanner(systemPrompt, contextData);
+  }
+  if (level === 'unit') {
+    return runStructuredUnitPlanner(systemPrompt, contextData);
   }
 
   const taskContent = `${systemPrompt}\n\n[THÔNG TIN THỰC TẾ]\n${contextData}\n\nChỉ xuất mảng JSON đúng schema.`;

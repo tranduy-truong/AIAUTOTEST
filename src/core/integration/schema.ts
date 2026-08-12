@@ -7,6 +7,22 @@ export type IntegrationDbEngine = 'postgres' | 'mysql' | 'sqlite';
 
 export type IntegrationExternalMockMode = 'IN_PROCESS_MSW' | 'FAKE_HTTP_SERVER';
 
+export type DatabaseContainerMode =
+  | 'REAL_CONTAINER'
+  | 'FILE_SQLITE'
+  | 'EXTERNAL_TEST_DB'
+  | 'INFRASTRUCTURE_UNAVAILABLE';
+
+export interface DatabaseContainerInstance {
+  databaseUrl: string;
+  port: number;
+  mode: DatabaseContainerMode;
+  containerObj?: any;
+  db?: any;
+  sqliteFilePath?: string;
+  stop: () => Promise<void>;
+}
+
 export interface PostgresContainerStrategyConfig {
   strategy: 'TESTCONTAINERS';
   engine: 'postgres';
@@ -80,6 +96,11 @@ export interface IntegrationSecurityPolicyConfig {
   redactSecretsInLogs: boolean;
 }
 
+export interface IntegrationVerificationContract {
+  databaseAssertions?: Array<{ table: string; minRows?: number }>;
+  unmockedRequestPolicy?: 'FAIL' | 'WARN';
+}
+
 export interface IntegrationConfig {
   version: 1;
   projectName: string;
@@ -89,6 +110,7 @@ export interface IntegrationConfig {
   externalMocks: IntegrationExternalMocksConfig;
   appServer: IntegrationAppServerConfig;
   security: IntegrationSecurityPolicyConfig;
+  verificationContract?: IntegrationVerificationContract;
 }
 
 export interface IntegrationRunContext {

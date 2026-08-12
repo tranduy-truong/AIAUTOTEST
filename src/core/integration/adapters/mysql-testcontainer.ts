@@ -1,6 +1,4 @@
-import type { MysqlContainerStrategyConfig } from '../schema.js';
-import { findFreePort } from '../process-manager.js';
-import type { DatabaseContainerInstance } from './postgres-testcontainer.js';
+import type { MysqlContainerStrategyConfig, DatabaseContainerInstance } from '../schema.js';
 
 export async function startMysqlContainer(
   config: MysqlContainerStrategyConfig,
@@ -27,6 +25,7 @@ export async function startMysqlContainer(
     return {
       databaseUrl,
       port,
+      mode: 'REAL_CONTAINER',
       containerObj: container,
       stop: async () => {
         console.log(`🐳 [Testcontainers] Đang dừng container MySQL (Port: ${port})...`);
@@ -36,18 +35,14 @@ export async function startMysqlContainer(
     };
   } catch (dockerError: any) {
     console.warn(
-      `⚠️ [Testcontainers Warning] Không thể khởi chạy Docker Container thật (${dockerError.message}). Chuyển sang fallback kết nối Local/External MySQL...`,
+      `⚠️ [Testcontainers Error] Không thể khởi chạy Docker Container thật (${dockerError.message}). Dừng Sandbox để tránh tạo URL giả.`,
     );
 
-    const fallbackPort = await findFreePort(3306);
-    const fallbackUrl = `mysql://root:test@localhost:${fallbackPort}/${dbName}`;
-
     return {
-      databaseUrl: fallbackUrl,
-      port: fallbackPort,
-      stop: async () => {
-        console.log(`🐳 [Testcontainers Fallback] Đã giải phóng tài nguyên MySQL.`);
-      },
+      databaseUrl: '',
+      port: 0,
+      mode: 'INFRASTRUCTURE_UNAVAILABLE',
+      stop: async () => {},
     };
   }
 }

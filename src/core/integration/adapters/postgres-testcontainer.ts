@@ -1,12 +1,4 @@
-import type { PostgresContainerStrategyConfig } from '../schema.js';
-import { findFreePort } from '../process-manager.js';
-
-export interface DatabaseContainerInstance {
-  databaseUrl: string;
-  port: number;
-  containerObj?: any;
-  stop: () => Promise<void>;
-}
+import type { PostgresContainerStrategyConfig, DatabaseContainerInstance } from '../schema.js';
 
 export async function startPostgresContainer(
   config: PostgresContainerStrategyConfig,
@@ -34,6 +26,7 @@ export async function startPostgresContainer(
     return {
       databaseUrl,
       port,
+      mode: 'REAL_CONTAINER',
       containerObj: container,
       stop: async () => {
         console.log(`🐳 [Testcontainers] Đang dừng container PostgreSQL (Port: ${port})...`);
@@ -43,18 +36,14 @@ export async function startPostgresContainer(
     };
   } catch (dockerError: any) {
     console.warn(
-      `⚠️ [Testcontainers Warning] Không thể khởi chạy Docker Container thật (${dockerError.message}). Chuyển sang fallback kết nối Local/External PostgreSQL...`,
+      `⚠️ [Testcontainers Error] Không thể khởi chạy Docker Container thật (${dockerError.message}). Dừng Sandbox để tránh tạo URL giả.`,
     );
 
-    const fallbackPort = await findFreePort(5432);
-    const fallbackUrl = `postgresql://postgres:test@localhost:${fallbackPort}/${dbName}`;
-
     return {
-      databaseUrl: fallbackUrl,
-      port: fallbackPort,
-      stop: async () => {
-        console.log(`🐳 [Testcontainers Fallback] Đã giải phóng tài nguyên Postgres.`);
-      },
+      databaseUrl: '',
+      port: 0,
+      mode: 'INFRASTRUCTURE_UNAVAILABLE',
+      stop: async () => {},
     };
   }
 }

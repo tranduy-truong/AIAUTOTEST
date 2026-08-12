@@ -1,21 +1,21 @@
 {
   "ok": true,
-  "runId": "int_1786544310877",
-  "durationMs": 10469,
+  "runId": "int_1786545711025",
+  "durationMs": 19985,
   "steps": [
     {
       "stepIndex": 1,
       "name": "Security Preflight & Config Validation",
       "ok": true,
-      "durationMs": 2,
+      "durationMs": 1,
       "detail": "Security Preflight đạt 100%. Đã kiểm tra Hostname, Database URL và Shell Commands."
     },
     {
       "stepIndex": 2,
       "name": "Start Test Database",
       "ok": true,
-      "durationMs": 17,
-      "detail": "Database đã khởi chạy thành công: file::memory:?cache=shared"
+      "durationMs": 21,
+      "detail": "Database sẵn sàng (Mode: FILE_SQLITE): file:D:\\AIAUTOTEST1-latest\\artifacts\\runs\\int_1786545711025\\sandbox-integration.sqlite"
     },
     {
       "stepIndex": 3,
@@ -35,7 +35,7 @@
       "stepIndex": 5,
       "name": "Start External Mocks",
       "ok": true,
-      "durationMs": 38,
+      "durationMs": 0,
       "detail": "Mocks sẵn sàng (IN_PROCESS_MSW)."
     },
     {
@@ -56,21 +56,21 @@
       "stepIndex": 8,
       "name": "Execute Integration Tests",
       "ok": true,
-      "durationMs": 10407,
+      "durationMs": 19951,
       "detail": "Vitest JSON Report: Total=1, Pass=1, Fail=0"
     },
     {
       "stepIndex": 9,
-      "name": "Assert Response & DB State",
+      "name": "Post-run Verification & DB Assertions",
       "ok": true,
-      "durationMs": 0,
+      "durationMs": 2,
       "detail": "Tất cả Schema response và DB connectivity assertions đã vượt qua kiểm tra."
     },
     {
       "stepIndex": 10,
       "name": "Teardown Resources",
       "ok": true,
-      "durationMs": 0,
+      "durationMs": 4,
       "detail": "Đã hoàn tất dọn dẹp Containers, Mocks và Tiến trình."
     }
   ],
@@ -78,5 +78,5 @@
   "passedTests": 1,
   "failedTests": 0,
   "failedTestNames": [],
-  "reportPath": "artifacts\\reports\\integration-int_1786544310877.md"
+  "reportPath": "artifacts\\reports\\integration-int_1786545711025.md"
 }

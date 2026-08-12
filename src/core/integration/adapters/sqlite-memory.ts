@@ -1,51 +1,60 @@
-import type { SqliteMemoryStrategyConfig } from '../schema.js';
-import type { DatabaseContainerInstance } from './postgres-testcontainer.js';
-
-export interface SqliteMemoryInstance extends DatabaseContainerInstance {
-  db?: any;
-}
+import fs from 'fs';
+import path from 'path';
+import type { SqliteMemoryStrategyConfig, DatabaseContainerInstance } from '../schema.js';
 
 export async function startSqliteMemory(
   config: SqliteMemoryStrategyConfig,
-): Promise<SqliteMemoryInstance> {
-  console.log('⚡ [SQLite Sandbox] Đang mở kết nối SQLite In-Memory Database thực tế...');
+  runDirectory = process.cwd(),
+): Promise<DatabaseContainerInstance> {
+  const sqliteFilePath = path.join(runDirectory, 'sandbox-integration.sqlite');
+  fs.mkdirSync(path.dirname(sqliteFilePath), { recursive: true });
 
-  const databaseUrl = 'file::memory:?cache=shared';
+  const databaseUrl = `file:${sqliteFilePath}`;
+  console.log(`⚡ [SQLite Sandbox] Đang khởi tạo SQLite Database file chia sẻ xuyên process: ${sqliteFilePath}...`);
 
   try {
     const sqlitePkg = 'better-sqlite3';
     // @ts-ignore
     const Database = (await import(/* @vite-ignore */ sqlitePkg)).default;
-    const db = new Database(':memory:', { memory: true });
+    const db = new Database(sqliteFilePath);
 
-    // Enable shared cache and WAL mode for test concurrency
+    // Enable WAL mode and foreign keys
     db.pragma('journal_mode = WAL');
     db.pragma('foreign_keys = ON');
 
-    console.log('✅ [SQLite Sandbox] SQLite In-Memory Database đã mở kết nối và sẵn sàng.');
+    console.log('✅ [SQLite Sandbox] File SQLite Sandbox đã khởi tạo thành công và sẵn sàng chia sẻ.');
 
     return {
       databaseUrl,
       port: 0,
+      mode: 'FILE_SQLITE',
       db,
+      sqliteFilePath,
       stop: async () => {
-        console.log('⚡ [SQLite Sandbox] Đóng kết nối SQLite In-Memory Database...');
+        console.log('⚡ [SQLite Sandbox] Đóng và giải phóng file SQLite Database...');
         try {
           db.close();
         } catch {}
-        console.log('✅ [SQLite Sandbox] Đã giải phóng SQLite Database.');
+        if (fs.existsSync(sqliteFilePath)) {
+          try { fs.rmSync(sqliteFilePath, { force: true }); } catch {}
+        }
+        console.log('✅ [SQLite Sandbox] Đã dọn dẹp file SQLite Database tạm.');
       },
     };
   } catch (sqliteError: any) {
     console.warn(
-      `⚠️ [SQLite Warning] Driver native better-sqlite3 chưa sẵn sàng (${sqliteError.message}). Dùng URL fallback shared-memory: ${databaseUrl}`,
+      `ℹ️ [SQLite Fallback] Driver better-sqlite3 native chưa cài đặt (${sqliteError.message}). Dùng file SQLite chuẩn: ${sqliteFilePath}`,
     );
 
     return {
       databaseUrl,
       port: 0,
+      mode: 'FILE_SQLITE',
+      sqliteFilePath,
       stop: async () => {
-        console.log('⚡ [SQLite Fallback] Đã giải phóng tài nguyên SQLite.');
+        if (fs.existsSync(sqliteFilePath)) {
+          try { fs.rmSync(sqliteFilePath, { force: true }); } catch {}
+        }
       },
     };
   }

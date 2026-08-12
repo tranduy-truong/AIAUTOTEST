@@ -23,6 +23,8 @@
     "src/core/locator-resolver.ts",
     "src/core/unit/**/*.ts",
     "src/core/integration/**/*.ts",
+    "src/core/auth/**/*.ts",
+    "src/core/e2e/**/*.ts",
     "tests/unit/**/*.ts",
     "tests/integration/**/*.ts"
   ]

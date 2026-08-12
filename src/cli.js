@@ -12,6 +12,17 @@ import { plannerPlanToTestCases } from "./agents/planner/schema.js";
 import { buildActionPlan } from "./core/action-plan.js";
 import { buildCompactDomReport, runLive } from "./agents/crawler/live-runner.js";
 import {
+  captureAuthSession,
+} from "./core/auth/auth-capture.js";
+import {
+  isAuthSessionValid,
+  loadAuthConfig,
+  loadAuthSession,
+  clearAuthSession,
+  createNoAuthSession,
+  SESSION_PATH,
+} from "./core/auth/auth-session.js";
+import {
   analyzeUnitInput,
   createUnitSession,
   loadUnitContext,
@@ -190,7 +201,89 @@ Vi du:
     console.log("\n[Crawler Agent] Dang khoi chay Live Crawler de xac minh Action Intent tren DOM that...");
     try {
       const parsedCases = plannerPlanToTestCases(loadStructuredE2EPlan());
-      const snapshotsMap = await runLive(parsedCases);
+
+      // === AUTH HELPER: Inject phiên xác thực vào Crawler ===
+      let authSession = loadAuthSession();
+      const nonInteractive = process.argv.includes('--non-interactive');
+      const authConfigPath = (() => {
+        const idx = process.argv.indexOf('--auth-config');
+        return idx !== -1 ? process.argv[idx + 1] : undefined;
+      })();
+
+      if (!isAuthSessionValid(authSession)) {
+        if (authConfigPath) {
+          // CI mode: đọc từ file config
+          const ciConfig = loadAuthConfig(authConfigPath);
+          if (ciConfig && ciConfig.strategy !== 'NONE') {
+            console.log('[Auth] CI mode: Đang capture auth session từ config file...');
+            authSession = await captureAuthSession(ciConfig);
+          } else {
+            authSession = createNoAuthSession();
+          }
+        } else if (!nonInteractive) {
+          // Interactive mode: hỏi người dùng
+          const { needsAuth } = await inquirer.prompt([{
+            type: 'confirm',
+            name: 'needsAuth',
+            message: 'Ứng dụng có yêu cầu đăng nhập không?',
+            default: false,
+          }]);
+
+          if (needsAuth) {
+            const { authStrategy } = await inquirer.prompt([{
+              type: 'list',
+              name: 'authStrategy',
+              message: 'Chọn chiến lược xác thực:',
+              choices: [
+                { name: 'Đăng nhập qua form (Username + Password)', value: 'PLAYWRIGHT_STORAGE_STATE' },
+                { name: 'JWT Token (inject vào Authorization header)', value: 'JWT_HEADER' },
+              ],
+            }]);
+
+            if (authStrategy === 'PLAYWRIGHT_STORAGE_STATE') {
+              const authAnswers = await inquirer.prompt([
+                { type: 'input', name: 'loginUrl', message: 'URL trang đăng nhập:', validate: v => v.trim() ? true : 'Bắt buộc nhập URL.' },
+                { type: 'input', name: 'username', message: 'Username / Email:' },
+                { type: 'password', name: 'password', message: 'Password:', mask: '*' },
+                { type: 'input', name: 'usernameLabel', message: 'Label ô Username trên form (Enter để tự detect):' },
+                { type: 'input', name: 'passwordLabel', message: 'Label ô Password trên form (Enter để tự detect):' },
+                { type: 'input', name: 'expectedRedirectUrl', message: 'URL/path sau khi đăng nhập thành công (Enter để tự detect):' },
+              ]);
+              console.log('[Auth] Đang mở trình duyệt để capture phiên đăng nhập...');
+              authSession = await captureAuthSession({ strategy: 'PLAYWRIGHT_STORAGE_STATE', ...authAnswers });
+              console.log('[Auth] ✅ Đã lưu phiên đăng nhập tại:', SESSION_PATH);
+            } else {
+              const { jwtToken } = await inquirer.prompt([{
+                type: 'password',
+                name: 'jwtToken',
+                message: 'Nhập JWT Token:',
+                mask: '*',
+              }]);
+              authSession = await captureAuthSession({ strategy: 'JWT_HEADER', jwtToken });
+            }
+          } else {
+            authSession = createNoAuthSession();
+          }
+        } else {
+          // non-interactive, không có auth config => bỏ qua auth
+          authSession = createNoAuthSession();
+        }
+      } else {
+        if (!nonInteractive) {
+          const { reuseSession } = await inquirer.prompt([{
+            type: 'confirm',
+            name: 'reuseSession',
+            message: `Tìm thấy phiên đăng nhập cũ (${authSession.loginUrl ?? 'không rõ URL'}). Dùng lại không?`,
+            default: true,
+          }]);
+          if (!reuseSession) {
+            clearAuthSession();
+            authSession = createNoAuthSession();
+          }
+        }
+      }
+
+      const snapshotsMap = await runLive(parsedCases, authSession ?? createNoAuthSession());
 
       const totalSnapshots = [...snapshotsMap.values()]
         .reduce((total, snapshots) => total + snapshots.length, 0);

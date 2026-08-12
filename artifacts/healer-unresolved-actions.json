@@ -1,0 +1,72 @@
+[
+  {
+    "testCaseId": "TC_01",
+    "stepIndex": 8,
+    "description": "Nhập 'Tổ chức Test' vào ô 'Nhập tên tổ chức'"
+  },
+  {
+    "testCaseId": "TC_01",
+    "stepIndex": 9,
+    "description": "Dropdown chọn loại hình tổ chức, chọn 'Tổ chức tôn giáo'"
+  },
+  {
+    "testCaseId": "TC_01",
+    "stepIndex": 10,
+    "description": "Dropdown chọn tôn giáo, chọn 'Công giáo'"
+  },
+  {
+    "testCaseId": "TC_01",
+    "stepIndex": 11,
+    "description": "Nhấn nút 'Lưu'"
+  },
+  {
+    "testCaseId": "TC_02",
+    "stepIndex": 8,
+    "description": "Nhập 'Tổ chức Test 2' vào ô 'Nhập tên tổ chức'"
+  },
+  {
+    "testCaseId": "TC_02",
+    "stepIndex": 9,
+    "description": "Nhập 'International name' vào ô 'Nhập tên quốc tế'"
+  },
+  {
+    "testCaseId": "TC_02",
+    "stepIndex": 10,
+    "description": "Nhập 'ITN' vào ô 'Nhập tên viết tắt'"
+  },
+  {
+    "testCaseId": "TC_02",
+    "stepIndex": 11,
+    "description": "Dropdown chọn loại hình tổ chức, chọn 'Tổ chức tôn giáo trực thuộc'"
+  },
+  {
+    "testCaseId": "TC_02",
+    "stepIndex": 12,
+    "description": "Dropdown 'Chọn trụ sở chính' chọn 'Chùa Vĩnh Nghiêm'"
+  },
+  {
+    "testCaseId": "TC_02",
+    "stepIndex": 13,
+    "description": "Nhấn nút 'Lưu'"
+  },
+  {
+    "testCaseId": "TC_03",
+    "stepIndex": 7,
+    "description": "Tại dòng dữ liệu mã tổ chức là 'TC010', bấm nút chính sửa có biểu tượng cây bút dưới cột 'Thao tác'"
+  },
+  {
+    "testCaseId": "TC_03",
+    "stepIndex": 8,
+    "description": "'Tên tổ chức' sửa thành 'Tổ chức đã chỉnh sửa'"
+  },
+  {
+    "testCaseId": "TC_03",
+    "stepIndex": 9,
+    "description": "Dropdown 'Chọn tôn giáo' sửa thành 'Đạo Tin Lành'"
+  },
+  {
+    "testCaseId": "TC_03",
+    "stepIndex": 10,
+    "description": "Nhấn nút 'Lưu'"
+  }
+]

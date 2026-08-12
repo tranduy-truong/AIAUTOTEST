@@ -1,0 +1,3 @@
+﻿# Tất cả file trong thư mục này đều chứa dữ liệu nhạy cảm (session cookies, JWT tokens).
+# TUYỆT ĐỐI KHÔNG COMMIT vào repository!
+*.json

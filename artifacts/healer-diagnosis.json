@@ -1,10 +1,11 @@
 {
-  "level": "unit",
-  "diagnosedAt": "2026-08-12T11:54:27.085Z",
-  "category": "ASSERTION_ERROR",
-  "reasonCode": "IMPLEMENTATION_DIFFERS_FROM_PLANNED_ORACLE",
+  "level": "e2e",
+  "diagnosedAt": "2026-08-12T15:16:57.742Z",
+  "category": "TIMING_OR_ASYNC",
+  "reasonCode": "OBSERVED_STATE_NOT_READY",
   "confidence": "high",
-  "canSelfHeal": false,
+  "canSelfHeal": true,
   "preservesExpectedResult": true,
-  "recoveryAction": "REPORT_ONLY"
+  "recoveryAction": "WAIT_FOR_OBSERVED_STATE",
+  "failedLine": 68
 }

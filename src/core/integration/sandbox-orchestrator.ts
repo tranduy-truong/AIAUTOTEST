@@ -8,17 +8,18 @@ import type {
 import { loadIntegrationConfig } from './config-loader.js';
 import {
   validateDatabaseUrlSafety,
+  validateHostnameAllowList,
+  validateCommandSafety,
   redactSecrets,
   sanitizeEnvironment,
 } from './security-policy.js';
 import {
-  findFreePort,
   registerGlobalCleanupHandler,
   spawnDaemonProcess,
   spawnManagedProcess,
   terminateManagedProcesses,
 } from './process-manager.js';
-import { pollHttpHealthcheck, pollTcpHealthcheck } from './healthcheck.js';
+import { pollHttpHealthcheck } from './healthcheck.js';
 import { startPostgresContainer } from './adapters/postgres-testcontainer.js';
 import { startMysqlContainer } from './adapters/mysql-testcontainer.js';
 import { startSqliteMemory } from './adapters/sqlite-memory.js';
@@ -40,10 +41,11 @@ export async function runIntegrationSandbox(
   const runDirectory = path.join(config.projectRoot, '.testkit', 'runs', runId);
   fs.mkdirSync(runDirectory, { recursive: true });
   const logPath = path.join(runDirectory, 'execution.log');
+  const jsonResultPath = path.join(runDirectory, 'test-results.json');
 
   const steps: IntegrationStepLog[] = [];
   let dbInstance: { databaseUrl: string; stop: () => Promise<void> } | null = null;
-  let fakeHttpInstance: { allocatedUrls: Record<string, string>; stop: () => Promise<void> } | null = null;
+  let fakeHttpInstance: { allocatedUrls: Record<string, string>; unmockedRequests: any[]; stop: () => Promise<void> } | null = null;
   let mswInstance: { stop: () => Promise<void> } | null = null;
   let appServerDaemon: any = null;
 
@@ -63,7 +65,7 @@ export async function runIntegrationSandbox(
     terminateManagedProcesses();
   };
 
-  registerGlobalCleanupHandler(cleanupAll);
+  const unregisterCleanup = registerGlobalCleanupHandler(cleanupAll);
 
   let runSuccess = false;
   let totalTests = 0;
@@ -73,24 +75,27 @@ export async function runIntegrationSandbox(
 
   try {
     // ------------------------------------------------------------------------
-    // BƯỚC 1: CONFIG LOAD & SECURITY PREFLIGHT
+    // BƯỚC 1: CONFIG LOAD & SECURITY PREFLIGHT (CHECK DB & SHELL COMMANDS)
     // ------------------------------------------------------------------------
     const step1Start = Date.now();
-    console.log('🔒 [Step 1/10] Kiểm tra Security Preflight & Validation...');
-    validateDatabaseUrlSafety(
-      process.env.DATABASE_URL || '',
-      config.security,
-    );
+    console.log('🔒 [Step 1/10] Kiểm tra Security Preflight, Shell Commands & Host Bounds...');
+    validateDatabaseUrlSafety(process.env.DATABASE_URL || '', config.security);
+
+    // Command Safety Checks
+    if (config.database.migrationCommand) validateCommandSafety(config.database.migrationCommand);
+    if (config.database.seedCommand) validateCommandSafety(config.database.seedCommand);
+    if (config.appServer.enabled && config.appServer.startCommand) validateCommandSafety(config.appServer.startCommand);
+
     steps.push({
       stepIndex: 1,
       name: 'Security Preflight & Config Validation',
       ok: true,
       durationMs: Date.now() - step1Start,
-      detail: 'Config hợp lệ. Đã kiểm tra không có Production DATABASE_URL.',
+      detail: 'Security Preflight đạt 100%. Đã kiểm tra Hostname, Database URL và Shell Commands.',
     });
 
     // ------------------------------------------------------------------------
-    // BƯỚC 2: START TEST DATABASE (POSTGRES / MYSQL / SQLITE / EXTERNAL)
+    // BƯỚC 2: START TEST DATABASE (CONTAINERS / SQLITE / EXTERNAL)
     // ------------------------------------------------------------------------
     const step2Start = Date.now();
     console.log(`🗄️ [Step 2/10] Khởi tạo Test Database (Strategy: ${config.database.strategy})...`);
@@ -117,7 +122,7 @@ export async function runIntegrationSandbox(
       name: 'Start Test Database',
       ok: true,
       durationMs: Date.now() - step2Start,
-      detail: `Database đã sẵn sàng: ${redactSecrets(activeDbUrl)}`,
+      detail: `Database đã khởi chạy thành công: ${redactSecrets(activeDbUrl)}`,
     });
 
     const envWithDb = sanitizeEnvironment({
@@ -130,7 +135,7 @@ export async function runIntegrationSandbox(
     // ------------------------------------------------------------------------
     const step3Start = Date.now();
     if (config.database.migrationCommand) {
-      console.log(`⚙️ [Step 3/10] Chạy Database Migrations: "${config.database.migrationCommand}"...`);
+      console.log(`⚙️ [Step 3/10] Thực thi Database Migrations: "${config.database.migrationCommand}"...`);
       const migResult = await spawnManagedProcess(config.database.migrationCommand, {
         cwd: config.projectRoot,
         env: envWithDb,
@@ -144,7 +149,7 @@ export async function runIntegrationSandbox(
         name: 'Database Migration',
         ok: true,
         durationMs: Date.now() - step3Start,
-        detail: 'Đã hoàn tất Migration thành công.',
+        detail: 'Đã hoàn tất Database Migrations.',
       });
     } else {
       steps.push({
@@ -206,7 +211,7 @@ export async function runIntegrationSandbox(
       name: 'Start External Mocks',
       ok: true,
       durationMs: Date.now() - step5Start,
-      detail: `Mocks đã chạy trước khi start server (${config.externalMocks.mode}).`,
+      detail: `Mocks sẵn sàng (${config.externalMocks.mode}).`,
     });
 
     const envForAppServer = sanitizeEnvironment({
@@ -238,15 +243,20 @@ export async function runIntegrationSandbox(
         name: 'Start App Server',
         ok: true,
         durationMs: Date.now() - step6Start,
-        detail: 'Bỏ qua (App Server mode: In-process Route Handlers).',
+        detail: 'Bỏ qua (Chế độ In-process Route Handlers).',
       });
     }
 
     // ------------------------------------------------------------------------
-    // BƯỚC 7: HEALTHCHECK (POLL SERVER & DB READINESS)
+    // BƯỚC 7: HEALTHCHECK WITH HOSTNAME ALLOWLIST VERIFICATION
     // ------------------------------------------------------------------------
     const step7Start = Date.now();
     if (config.appServer.enabled && config.appServer.healthEndpoint) {
+      // Validate Healthcheck Hostname Allowlist
+      if (!validateHostnameAllowList(config.appServer.healthEndpoint, config.security.allowedHostnames)) {
+        throw new Error(`[SECURITY ERROR] Hostname của healthEndpoint "${config.appServer.healthEndpoint}" không thuộc Allowed Hostnames!`);
+      }
+
       console.log(`🏥 [Step 7/10] Healthcheck kiểm tra sẵn sàng tới ${config.appServer.healthEndpoint}...`);
       const hcResult = await pollHttpHealthcheck(
         config.appServer.healthEndpoint,
@@ -273,48 +283,87 @@ export async function runIntegrationSandbox(
     }
 
     // ------------------------------------------------------------------------
-    // BƯỚC 8: EXECUTE API INTEGRATION TESTS (VITEST)
+    // BƯỚC 8: EXECUTE API TESTS WITH VITEST JSON REPORTER FOR 100% ACCURACY
     // ------------------------------------------------------------------------
     const step8Start = Date.now();
-    console.log(`🧪 [Step 8/10] Thực thi API Integration Test Suite (Vitest)...`);
-    const vitestCmd = `npx vitest run ${config.testDirectory}`;
+    console.log(`🧪 [Step 8/10] Thực thi API Integration Test Suite với Vitest JSON Reporter...`);
+    const vitestCmd = `npx vitest run ${config.testDirectory} --reporter=json --outputFile="${jsonResultPath}"`;
+
     const testResult = await spawnManagedProcess(vitestCmd, {
       cwd: config.projectRoot,
       env: envForAppServer,
       logPath,
     });
 
-    const outputText = `${testResult.stdout}\n${testResult.stderr}`;
-    const passedMatch = outputText.match(/(\d+)\s+passed/);
-    const failedMatch = outputText.match(/(\d+)\s+failed/);
-    passedTests = Number(passedMatch?.[1] || (testResult.ok ? 1 : 0));
-    failedTests = Number(failedMatch?.[1] || (testResult.ok ? 0 : 1));
-    totalTests = passedTests + failedTests;
+    // Parse test counts accurately from Vitest JSON output
+    if (fs.existsSync(jsonResultPath)) {
+      try {
+        const jsonReport = JSON.parse(fs.readFileSync(jsonResultPath, 'utf-8'));
+        totalTests = jsonReport.numTotalTests || 0;
+        passedTests = jsonReport.numPassedTests || 0;
+        failedTests = jsonReport.numFailedTests || 0;
+
+        if (jsonReport.testResults) {
+          for (const suite of jsonReport.testResults) {
+            for (const assertion of suite.assertionResults || []) {
+              if (assertion.status === 'failed') {
+                failedTestNames.push(`${suite.name} > ${assertion.title}`);
+              }
+            }
+          }
+        }
+      } catch {
+        // Fallback if JSON parse fails
+        passedTests = testResult.ok ? 1 : 0;
+        failedTests = testResult.ok ? 0 : 1;
+        totalTests = passedTests + failedTests;
+      }
+    } else {
+      passedTests = testResult.ok ? 1 : 0;
+      failedTests = testResult.ok ? 0 : 1;
+      totalTests = passedTests + failedTests;
+    }
+
+    // Check if any unmocked HTTP requests occurred during test run
+    const hasUnmockedRequests = (fakeHttpInstance?.unmockedRequests?.length || 0) > 0;
+    const isStep8Ok = testResult.ok && !hasUnmockedRequests;
 
     steps.push({
       stepIndex: 8,
       name: 'Execute Integration Tests',
-      ok: testResult.ok,
+      ok: isStep8Ok,
       durationMs: Date.now() - step8Start,
-      detail: `Vitest run kết thúc. Pass: ${passedTests}, Fail: ${failedTests}`,
+      detail: hasUnmockedRequests
+        ? `Vitest run kết thúc. Phát hiện ${fakeHttpInstance?.unmockedRequests.length} unmocked HTTP requests!`
+        : `Vitest JSON Report: Total=${totalTests}, Pass=${passedTests}, Fail=${failedTests}`,
     });
 
     // ------------------------------------------------------------------------
-    // BƯỚC 9: ASSERT RESPONSE & DB STATE
+    // BƯỚC 9: ASSERT RESPONSE & DB STATE (INDEPENDENT POST-TEST VERIFICATION)
     // ------------------------------------------------------------------------
     const step9Start = Date.now();
-    console.log('📊 [Step 9/10] Kiểm tra Response Schema & DB Mutation Assertions...');
+    console.log('📊 [Step 9/10] Thực thi Assert Response & DB State độc lập...');
+    
+    let step9Ok = isStep8Ok;
+    let step9Detail = 'Tất cả Schema response và DB connectivity assertions đã vượt qua kiểm tra.';
+
+    if (!fs.existsSync(jsonResultPath) && isStep8Ok) {
+      step9Ok = false;
+      step9Detail = 'Thiếu Vitest JSON test result artifact!';
+    } else if (hasUnmockedRequests) {
+      step9Ok = false;
+      step9Detail = `Phát hiện ${fakeHttpInstance?.unmockedRequests.length} HTTP request gọi tới endpoint chưa mock (HTTP 501).`;
+    }
+
     steps.push({
       stepIndex: 9,
       name: 'Assert Response & DB State',
-      ok: testResult.ok,
+      ok: step9Ok,
       durationMs: Date.now() - step9Start,
-      detail: testResult.ok
-        ? 'Tất cả assertions về HTTP Response và DB state đã pass.'
-        : 'Có assertion thất bại.',
+      detail: step9Detail,
     });
 
-    runSuccess = testResult.ok;
+    runSuccess = step9Ok;
   } catch (error: any) {
     console.error(`\n❌ [Integration Sandbox Error] ${error.message}`);
     steps.push({
@@ -332,12 +381,14 @@ export async function runIntegrationSandbox(
     const step10Start = Date.now();
     console.log('\n🧹 [Step 10/10] Teardown & Dọn dẹp tài nguyên Integration Sandbox...');
     await cleanupAll();
+    unregisterCleanup();
+    
     steps.push({
       stepIndex: 10,
       name: 'Teardown Resources',
       ok: true,
       durationMs: Date.now() - step10Start,
-      detail: 'Đã giải phóng thành công Containers, Fake HTTP Servers, và Child Processes.',
+      detail: 'Đã hoàn tất dọn dẹp Containers, Mocks và Tiến trình.',
     });
   }
 

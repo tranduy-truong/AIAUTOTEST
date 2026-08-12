@@ -1,7 +1,6 @@
 import { spawn, ChildProcess } from 'child_process';
 import net from 'net';
 import fs from 'fs';
-import path from 'path';
 import { redactSecrets } from './security-policy.js';
 
 export interface ManagedProcessOptions {
@@ -20,6 +19,7 @@ export interface ManagedProcessResult {
 }
 
 const activeProcesses = new Set<ChildProcess>();
+const activeCleanupCallbacks = new Set<() => Promise<void> | void>();
 let globalCleanupRegistered = false;
 
 export function findFreePort(preferredPort = 0): Promise<number> {
@@ -42,25 +42,43 @@ export function findFreePort(preferredPort = 0): Promise<number> {
   });
 }
 
-export function registerGlobalCleanupHandler(onCleanup?: () => Promise<void> | void): void {
-  if (globalCleanupRegistered) return;
-  globalCleanupRegistered = true;
+export function registerGlobalCleanupHandler(onCleanup: () => Promise<void> | void): () => void {
+  activeCleanupCallbacks.add(onCleanup);
 
-  const handleSignal = async (signal: string) => {
-    console.log(`\n⚠️ Nhận tín hiệu ${signal}. Đang dọn dẹp tiến trình Integration Sandbox...`);
-    if (onCleanup) {
-      try {
-        await onCleanup();
-      } catch (err) {
-        console.error('Lỗi khi dọn dẹp cleanup handler:', err);
+  if (!globalCleanupRegistered) {
+    globalCleanupRegistered = true;
+
+    const handleSignal = async (source: string, errorDetail?: any) => {
+      console.log(`\n⚠️ [Process Manager] Nhận sự kiện ${source}. Đang thực thi Teardown tài nguyên...`);
+      if (errorDetail && (source === 'uncaughtException' || source === 'unhandledRejection')) {
+        console.error(`❌ Chi tiết lỗi ngắt tiến trình:`, errorDetail);
       }
-    }
-    terminateManagedProcesses();
-    process.exit(130);
-  };
 
-  process.on('SIGINT', () => handleSignal('SIGINT'));
-  process.on('SIGTERM', () => handleSignal('SIGTERM'));
+      for (const cb of Array.from(activeCleanupCallbacks)) {
+        try {
+          await cb();
+        } catch (err) {
+          console.error('Lỗi khi chạy cleanup callback:', err);
+        }
+      }
+
+      terminateManagedProcesses();
+      if (source !== 'exit') {
+        process.exit(130);
+      }
+    };
+
+    process.on('SIGINT', () => handleSignal('SIGINT'));
+    process.on('SIGTERM', () => handleSignal('SIGTERM'));
+    process.on('exit', () => handleSignal('exit'));
+    process.on('uncaughtException', (err) => handleSignal('uncaughtException', err));
+    process.on('unhandledRejection', (reason) => handleSignal('unhandledRejection', reason));
+  }
+
+  // Return unregister function
+  return () => {
+    activeCleanupCallbacks.delete(onCleanup);
+  };
 }
 
 export function terminateManagedProcesses(): void {

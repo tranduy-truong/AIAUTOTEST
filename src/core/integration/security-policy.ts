@@ -1,14 +1,16 @@
 import type { IntegrationSecurityPolicyConfig } from './schema.js';
 
 const PROD_DB_KEYWORDS = [
-  'production',
-  'prod_db',
   'rds.amazonaws.com',
   'neon.tech',
   'supabase.co',
   'cockroachlabs.cloud',
   'cloudsql',
   'azure.com',
+  'production',
+  'prod_db',
+  'prod-db',
+  'main-db',
 ];
 
 const SECRET_PATTERNS = [
@@ -19,16 +21,35 @@ const SECRET_PATTERNS = [
   /bearer\s+([a-z0-9._-]+)/gi,
 ];
 
+const DANGEROUS_SHELL_PATTERNS = [
+  /(;|\&\&|\|)\s*(rm|del|rd|format)\s+/i,
+  /;\s*rm\s+/i,
+  /;\s*del\s+/i,
+  /&&\s*rm\s+/i,
+  /&&\s*del\s+/i,
+  /\|\s*sh\b/i,
+  /\|\s*bash\b/i,
+  /`[^`]+`/g,
+  /\$\([^)]+\)/g,
+];
+
 export function isProductionDatabaseUrl(dbUrl: string): boolean {
   if (!dbUrl) return false;
   const lower = dbUrl.toLowerCase();
   
-  // Allow explicit test database names
+  // CRITICAL SECURITY FIX: Check production host indicators FIRST!
+  // Host check ALWAYS takes precedence over database name suffix/prefix.
+  const containsProdKeyword = PROD_DB_KEYWORDS.some(keyword => lower.includes(keyword));
+  if (containsProdKeyword) {
+    return true; // Strictly classified as Production!
+  }
+
+  // Only if no production keyword matches, check if it's explicitly named as a test DB
   if (lower.includes('_test') || lower.includes('test_') || lower.includes('testdb')) {
     return false;
   }
 
-  return PROD_DB_KEYWORDS.some(keyword => lower.includes(keyword));
+  return false;
 }
 
 export function validateDatabaseUrlSafety(dbUrl: string, config: IntegrationSecurityPolicyConfig): void {
@@ -36,12 +57,13 @@ export function validateDatabaseUrlSafety(dbUrl: string, config: IntegrationSecu
 
   if (isProductionDatabaseUrl(dbUrl)) {
     throw new Error(
-      `[SECURITY ERROR] Phát hiện DATABASE_URL có dấu hiệu Production ("${redactSecrets(dbUrl)}"). Integration Sandbox bị chặn để bảo vệ dữ liệu thật!`,
+      `[SECURITY ERROR] Phát hiện DATABASE_URL có dấu hiệu Production ("${redactSecrets(dbUrl)}"). Integration Sandbox bị chặn hoàn toàn để bảo vệ dữ liệu thật!`,
     );
   }
 }
 
 export function validateHostnameAllowList(urlStr: string, allowedHostnames: string[]): boolean {
+  if (!urlStr) return true;
   try {
     const parsed = new URL(urlStr);
     const hostname = parsed.hostname.toLowerCase();
@@ -51,7 +73,16 @@ export function validateHostnameAllowList(urlStr: string, allowedHostnames: stri
 
     return fullAllowList.includes(hostname);
   } catch {
-    return false;
+    return false; // Invalid URL is not allowed
+  }
+}
+
+export function validateCommandSafety(commandLine: string): void {
+  if (!commandLine) return;
+  for (const pattern of DANGEROUS_SHELL_PATTERNS) {
+    if (pattern.test(commandLine)) {
+      throw new Error(`[SECURITY ERROR] Lệnh "${commandLine}" chứa chuỗi ký tự nguy hại. Bị chặn bởi Shell Safety Policy!`);
+    }
   }
 }
 
@@ -78,12 +109,20 @@ export function sanitizeEnvironment(
   env: Record<string, string | undefined>,
 ): Record<string, string> {
   const result: Record<string, string> = {};
-  const forbiddenKeys = ['AWS_SECRET_ACCESS_KEY', 'PROD_DB_PASSWORD', 'PRODUCTION_KEY', 'STRIPE_LIVE_SECRET'];
-
+  
   for (const [key, value] of Object.entries(env)) {
     if (value === undefined) continue;
-    if (forbiddenKeys.includes(key.toUpperCase())) {
-      continue; // Strip production secrets from child process env
+    const upperKey = key.toUpperCase();
+    
+    // Scrub all common credential patterns from sub-process environment
+    if (
+      upperKey.includes('PROD_DB') ||
+      upperKey.includes('AWS_SECRET') ||
+      upperKey.includes('STRIPE_LIVE') ||
+      upperKey.includes('PRIVATE_KEY') ||
+      upperKey.includes('PRODUCTION_KEY')
+    ) {
+      continue;
     }
     result[key] = value;
   }

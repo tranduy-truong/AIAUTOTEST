@@ -25,18 +25,24 @@
     "@testing-library/jest-dom": "^7.0.0",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.3",
+    "@types/better-sqlite3": "^7.6.12",
     "@types/node": "^26.2.0",
     "@vitejs/plugin-react": "^6.0.5",
     "@vitest/coverage-v8": "^4.1.10",
     "dotenv": "^16.6.1",
     "jsdom": "^30.0.1",
+    "msw": "^2.7.0",
     "tsx": "^4.23.7",
     "typescript": "^5.9.3",
     "vite-tsconfig-paths": "^6.1.1",
     "vitest": "^4.1.10"
   },
   "dependencies": {
+    "@testcontainers/mysql": "^10.18.0",
+    "@testcontainers/postgresql": "^10.18.0",
+    "better-sqlite3": "^11.8.1",
     "inquirer": "^9.3.8",
-    "openai": "^7.4.0"
+    "openai": "^7.4.0",
+    "testcontainers": "^10.18.0"
   }
 }

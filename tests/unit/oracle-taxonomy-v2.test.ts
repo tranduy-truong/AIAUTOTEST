@@ -92,6 +92,31 @@ describe('Oracle Taxonomy v2 & Gate Resolver', () => {
     expect(replaced.auditTrail[0].expectedAfter).toBe(90000);
   });
 
+  it('preserves every audit entry when a tester reviews the oracle more than once', () => {
+    const characterization = buildCharacterizationOracle('price - percent', 99990);
+    const approved = promoteToSpecificationByTester(
+      characterization,
+      'LOCAL_TESTER',
+      'Chấp nhận expected lần đầu.',
+      { kind: 'return', value: 99990 },
+    );
+    const replaced = replaceExpectedByTester(
+      approved,
+      { kind: 'return', value: 99990 },
+      { kind: 'return', value: 90000 },
+    );
+    expect(replaced.auditTrail.map(entry => entry.action)).toEqual([
+      'APPROVE_EXPECTED',
+      'REPLACE_EXPECTED',
+    ]);
+  });
+
+  it('does not allow a CI actor to approve an implementation-derived expected', () => {
+    const characterization = buildCharacterizationOracle('price - percent', 99990);
+    expect(() => promoteToSpecificationByTester(characterization, 'CI_USER'))
+      .toThrow('CI không được tự động');
+  });
+
   it('migrates a v1 legacy plan to v2 seamlessly', () => {
     const planV1: StructuredUnitPlan = {
       version: 1,
@@ -129,6 +154,27 @@ describe('Oracle Taxonomy v2 & Gate Resolver', () => {
     expect(testCaseV2.oracle?.authority).toBe('REQUIREMENT');
   });
 
+  it('migrates AI inference as PROPOSED instead of falsely VERIFIED', () => {
+    const testCase: UnitPlannedTestCase = {
+      id: 'UT_DISCOUNT_002', name: 'proposed', branchIds: [],
+      inputs: { price: 1, percent: 1 }, expected: { kind: 'return', value: 0 },
+      oracleSource: 'implementation',
+      oracleEvidence: { status: 'proposed', source: 'ai-inference' },
+      mocks: [],
+    };
+    const plan = migratePlanV1ToV2({
+      version: 1,
+      source: 'ai-planner',
+      project: { name: 'test', root: '.', testFramework: 'vitest' },
+      targets: [{
+        sourceFile: 'src/discount.ts', symbol: 'calculateDiscount', sourceHash: 'hash',
+        executionMode: 'NATIVE_DIRECT', profile: 'UNIT_NATIVE', testCases: [testCase],
+      }],
+      clarifications: [],
+    });
+    expect(plan.targets[0].testCases[0].oracle?.evidence.status).toBe('PROPOSED');
+  });
+
   it('detects CONFLICT_WITH_SPEC when implementation differs from requirement, preserving specExpected', () => {
     const target = mockTarget(); // Code returns price - percent (100000 - 10 = 99990)
     const testCase: UnitPlannedTestCase = {
@@ -148,7 +194,7 @@ describe('Oracle Taxonomy v2 & Gate Resolver', () => {
     );
 
     expect(gate.gateStatus).toBe('CONFLICT_WITH_SPEC');
-    expect(gate.reason).toContain('Mâu thuẫn với Requirement');
+    expect(gate.reason).toContain('Mâu thuẫn với Specification');
     expect(gate.specExpected).toEqual({ kind: 'return', value: 90000 });
   });
 });

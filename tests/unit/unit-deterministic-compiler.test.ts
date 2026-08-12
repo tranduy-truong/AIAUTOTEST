@@ -203,8 +203,14 @@ describe('Deterministic Unit Compiler', () => {
     const prepared = prepareOracleVerifiedPlan({}, target, plan);
     expect(prepared.unresolvedCases).toEqual([]);
     expect(prepared.resolutions).toEqual([
-      expect.objectContaining({ status: 'VERIFIED', evidence: expect.objectContaining({ source: 'mock-trace' }) }),
-      expect.objectContaining({ status: 'VERIFIED', evidence: expect.objectContaining({ source: 'mock-trace' }) }),
+      expect.objectContaining({
+        gateStatus: 'READY_CHARACTERIZATION',
+        oracle: expect.objectContaining({ evidence: expect.objectContaining({ method: 'MOCK_TRACE' }) }),
+      }),
+      expect.objectContaining({
+        gateStatus: 'READY_CHARACTERIZATION',
+        oracle: expect.objectContaining({ evidence: expect.objectContaining({ method: 'MOCK_TRACE' }) }),
+      }),
     ]);
     const dependencyPaths = new Map(target.dependencies.map(dependency => [dependency.module, dependency.module]));
     const compiled = compileUnitTestFile({

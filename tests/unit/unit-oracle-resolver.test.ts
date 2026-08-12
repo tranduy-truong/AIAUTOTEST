@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { compileUnitTestFile } from '../../src/core/unit/compiler/test-file-compiler.js';
-import { resolveUnitTestOracle } from '../../src/core/unit/oracle/oracle-resolver.js';
+import { evaluateOracleGate, resolveUnitTestOracle } from '../../src/core/unit/oracle/oracle-resolver.js';
 import { prepareOracleVerifiedPlan } from '../../src/agents/generator/unit-generator.js';
+import { migrateTestCaseV1ToV2 } from '../../src/core/unit/plan-migrator.js';
+import { promoteToSpecificationByTester } from '../../src/core/unit/oracle/oracle-taxonomy.js';
 import type { UnitPlannedTestCase, UnitTarget } from '../../src/core/unit/schema.js';
 
 function target(rawCode = 'export const sum = (left: number, right: number) => left + right;'): UnitTarget {
@@ -60,13 +62,13 @@ describe('Unit Oracle Resolver', () => {
   });
 
   it('accepts an expected result explicitly confirmed by the tester in CLI', () => {
-    const testCase = planned(999);
-    testCase.oracleSource = 'tester-confirmation';
-    testCase.oracleEvidence = {
-      status: 'verified',
-      source: 'tester-confirmation',
-      reference: 'CLI-20260812-UT_SUM_001',
-    };
+    const testCase = migrateTestCaseV1ToV2(planned(999));
+    testCase.oracle = promoteToSpecificationByTester(
+      testCase.oracle!,
+      'LOCAL_TESTER',
+      'Tester xác nhận expected qua CLI.',
+      testCase.expected,
+    );
     expect(resolveUnitTestOracle({}, target(), testCase)).toMatchObject({
       status: 'VERIFIED',
       evidence: { source: 'tester-confirmation', status: 'verified' },
@@ -74,15 +76,16 @@ describe('Unit Oracle Resolver', () => {
   });
 
   it('rejects a forged tester confirmation without an audit reference', () => {
-    const testCase = planned(999);
-    testCase.oracleSource = 'tester-confirmation';
-    testCase.oracleEvidence = {
-      status: 'verified',
-      source: 'tester-confirmation',
+    const testCase = migrateTestCaseV1ToV2(planned(999));
+    testCase.oracle = {
+      intentType: 'SPECIFICATION',
+      authority: 'TESTER_CONFIRMATION',
+      evidence: { status: 'VERIFIED', method: 'TESTER_APPROVAL' },
+      auditTrail: [],
     };
     const result = resolveUnitTestOracle({}, target(), testCase);
     expect(result.status).toBe('NEEDS_ORACLE');
-    expect(result.errors.join(' ')).toContain('reference');
+    expect(result.errors.join(' ')).toContain('audit');
   });
 
   it('does not statically execute a target with mocked IO dependencies', () => {
@@ -186,9 +189,9 @@ describe('Unit Oracle Resolver', () => {
     const testCase = planned(5);
     testCase.oracleSource = 'existing-test';
     testCase.oracleEvidence = { status: 'observed', source: 'sandbox-observation' };
-    const result = resolveUnitTestOracle({}, target(), testCase);
-    expect(result.status).toBe('NEEDS_ORACLE');
-    expect(result.errors.join(' ')).toContain('characterization');
+    const result = evaluateOracleGate({}, target(), testCase);
+    expect(result.gateStatus).toBe('READY_CHARACTERIZATION');
+    expect(result.oracle.intentType).toBe('CHARACTERIZATION');
   });
 
   it('keeps verified cases and isolates unresolved cases in the same target', () => {

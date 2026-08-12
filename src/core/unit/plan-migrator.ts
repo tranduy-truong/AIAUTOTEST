@@ -18,9 +18,17 @@ export function migrateTestCaseV1ToV2(testCase: UnitPlannedTestCase): UnitPlanne
   let intentType: TestIntentType = 'CHARACTERIZATION';
   let authority: OracleAuthority = 'IMPLEMENTATION';
   let method: OracleEvidenceMethod = 'STATIC_EVALUATION';
-  let status: OracleEvidenceStatus = 'VERIFIED';
+  let status: OracleEvidenceStatus = legacyEvidence?.status === 'verified'
+    ? 'VERIFIED'
+    : legacyEvidence?.status === 'observed'
+      ? 'OBSERVED'
+      : 'PROPOSED';
 
-  if (legacySource === 'requirement' || legacyEvidence?.source === 'requirement') {
+  if (legacyEvidence?.source === 'sandbox-observation') {
+    intentType = 'CHARACTERIZATION';
+    authority = 'IMPLEMENTATION';
+    method = 'SANDBOX_OBSERVATION';
+  } else if (legacySource === 'requirement' || legacyEvidence?.source === 'requirement') {
     intentType = 'SPECIFICATION';
     authority = 'REQUIREMENT';
     method = 'REQUIREMENT_REFERENCE';
@@ -33,6 +41,10 @@ export function migrateTestCaseV1ToV2(testCase: UnitPlannedTestCase): UnitPlanne
     authority = 'EXISTING_TEST';
     method = 'EXISTING_TEST_REFERENCE';
   }
+
+  // A legacy flag cannot manufacture tester approval. It stays proposed until
+  // the interactive confirmation flow writes a signed audit entry.
+  if (authority === 'TESTER_CONFIRMATION') status = 'PROPOSED';
 
   const oracle: ComprehensiveOracle = {
     intentType,

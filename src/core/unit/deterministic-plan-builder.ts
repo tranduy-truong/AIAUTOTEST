@@ -10,6 +10,7 @@ import type {
   UnitPlannedTestCase,
   UnitTarget,
 } from './schema.js';
+import { migratePlanV1ToV2 } from './plan-migrator.js';
 import { evaluateTargetStatically, runtimeToDataValue } from './oracle/ast-evaluator.js';
 
 function slug(value: string): string {
@@ -387,7 +388,7 @@ export function buildDeterministicUnitTarget(target: UnitTarget) {
 }
 
 export function buildDeterministicUnitPlan(context: UnitContextBundle): StructuredUnitPlan {
-  return {
+  return migratePlanV1ToV2({
     version: 1,
     source: 'deterministic-planner',
     project: {
@@ -397,5 +398,5 @@ export function buildDeterministicUnitPlan(context: UnitContextBundle): Structur
     },
     targets: context.targets.map(buildDeterministicUnitTarget),
     clarifications: [],
-  };
+  });
 }

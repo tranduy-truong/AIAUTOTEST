@@ -176,6 +176,7 @@ export type UnitTestCaseGenerationStatus =
 export interface UnitTestCaseGenerationResult {
   testCaseId: string;
   status: UnitTestCaseGenerationStatus;
+  gateStatus?: OracleGateStatus;
   errors: string[];
 }
 
@@ -300,7 +301,7 @@ export interface UnitMockPlan {
   behavior: UnitMockBehavior;
 }
 
-import type { ComprehensiveOracle, OracleGateResult } from './oracle/oracle-taxonomy.js';
+import type { ComprehensiveOracle, OracleGateResult, OracleGateStatus } from './oracle/oracle-taxonomy.js';
 
 export interface UnitPlannedTestCase {
   id: string;

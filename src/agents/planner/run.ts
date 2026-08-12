@@ -26,6 +26,7 @@ import {
   resolveDeterministicUnitPlan,
   resolveUnitPlannerProposal,
 } from '../../core/unit/planner-fallback.js';
+import { migratePlanV1ToV2 } from '../../core/unit/plan-migrator.js';
 import {
   artifact,
   detail,
@@ -460,7 +461,7 @@ async function runStructuredUnitPlanner(
     artifact('Chi tiết kỹ thuật', 'planner-validation-errors.json');
   }
 
-  const plan: StructuredUnitPlan = {
+  const legacyPlan: StructuredUnitPlan = {
     version: 1,
     source: plannerModes.every(mode => mode === 'ai')
       ? 'ai-planner'
@@ -475,6 +476,7 @@ async function runStructuredUnitPlanner(
     targets: plannedTargets,
     clarifications: [...new Set(clarifications)],
   };
+  const plan = migratePlanV1ToV2(legacyPlan);
   const validContext: UnitContextBundle = {
     ...context,
     targets: context.targets.filter(target => plannedTargets.some(

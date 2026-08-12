@@ -380,8 +380,16 @@ function validateTarget(planTarget: UnitPlanTarget, target: UnitTarget): UnitPla
         issues.push({ code: 'INVENTED_BRANCH', target: targetLabel, testCaseId: testCase.id, message: `Branch không tồn tại: ${branchId}` });
       } else coveredBranches.add(branchId);
     }
-    if (!['requirement', 'type-contract', 'existing-test', 'implementation', 'tester-confirmation'].includes(testCase.oracleSource)) {
-      issues.push({ code: 'INVALID_ORACLE_SOURCE', target: targetLabel, testCaseId: testCase.id, message: 'oracleSource không hợp lệ.' });
+    if (!testCase.oracle) {
+      if (!testCase.oracleSource || !['requirement', 'type-contract', 'existing-test', 'implementation', 'tester-confirmation'].includes(testCase.oracleSource)) {
+        issues.push({ code: 'INVALID_ORACLE_SOURCE', target: targetLabel, testCaseId: testCase.id, message: 'Test case phải có oracle v2 hoặc oracleSource legacy hợp lệ.' });
+      }
+    } else if (
+      !['SPECIFICATION', 'CHARACTERIZATION'].includes(testCase.oracle.intentType)
+      || !['REQUIREMENT', 'TESTER_CONFIRMATION', 'EXISTING_TEST', 'IMPLEMENTATION'].includes(testCase.oracle.authority)
+      || !Array.isArray(testCase.oracle.auditTrail)
+    ) {
+      issues.push({ code: 'INVALID_ORACLE_V2', target: targetLabel, testCaseId: testCase.id, message: 'Oracle taxonomy v2 không hợp lệ.' });
     }
     if (testCase.oracleEvidence !== undefined) {
       for (const issue of validateOracleEvidence(testCase.oracleEvidence)) {

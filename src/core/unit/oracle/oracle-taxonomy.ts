@@ -1,3 +1,6 @@
+import { randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
+
 export type TestIntentType = 'SPECIFICATION' | 'CHARACTERIZATION';
 
 export type OracleAuthority =
@@ -104,7 +107,7 @@ export function appendAuditEntry(
 ): ComprehensiveOracle {
   const fullEntry: OracleAuditEntry = {
     ...entry,
-    id: `audit_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+    id: `audit_${randomUUID()}`,
     timestamp: new Date().toISOString(),
   };
 
@@ -118,7 +121,11 @@ export function promoteToSpecificationByTester(
   currentOracle: ComprehensiveOracle,
   actorType: 'LOCAL_TESTER' | 'CI_USER' = 'LOCAL_TESTER',
   note = 'Expected này do implementation đề xuất và đã được tester chấp thuận qua CLI.',
+  expectedAfter?: unknown,
 ): ComprehensiveOracle {
+  if (actorType === 'CI_USER') {
+    throw new Error('CI không được tự động phê duyệt Characterization thành Specification.');
+  }
   const nextOracle: ComprehensiveOracle = {
     ...currentOracle,
     intentType: 'SPECIFICATION',
@@ -136,6 +143,7 @@ export function promoteToSpecificationByTester(
     action: 'APPROVE_EXPECTED',
     previousOracle: currentOracle,
     nextOracle,
+    expectedAfter,
     source: 'interactive-cli',
     note,
   });
@@ -148,6 +156,9 @@ export function replaceExpectedByTester(
   actorType: 'LOCAL_TESTER' | 'CI_USER' = 'LOCAL_TESTER',
   note = 'Tester tự tay thay thế kết quả mong đợi khác với đề xuất ban đầu.',
 ): ComprehensiveOracle {
+  if (actorType === 'CI_USER') {
+    throw new Error('CI không được tự động thay thế expected result.');
+  }
   const nextOracle: ComprehensiveOracle = {
     ...currentOracle,
     intentType: 'SPECIFICATION',
@@ -169,4 +180,34 @@ export function replaceExpectedByTester(
     source: 'interactive-cli',
     note,
   });
+}
+
+/**
+ * A TESTER_CONFIRMATION authority is trusted only when it was produced by the
+ * interactive confirmation workflow. Merely writing the authority into JSON
+ * must never bypass the Oracle Gate.
+ */
+export function hasValidTesterApprovalAudit(
+  oracle: ComprehensiveOracle,
+  expected: unknown,
+): boolean {
+  if (
+    oracle.intentType !== 'SPECIFICATION'
+    || oracle.authority !== 'TESTER_CONFIRMATION'
+    || oracle.evidence.status !== 'VERIFIED'
+    || oracle.evidence.method !== 'TESTER_APPROVAL'
+  ) return false;
+
+  const approval = [...oracle.auditTrail].reverse().find(entry =>
+    entry.action === 'APPROVE_EXPECTED' || entry.action === 'REPLACE_EXPECTED',
+  );
+  if (!approval) return false;
+  if (approval.actor.type !== 'LOCAL_TESTER') return false;
+  if (!['interactive-cli', 'web-ui'].includes(approval.source)) return false;
+  if (
+    approval.nextOracle.intentType !== 'SPECIFICATION'
+    || approval.nextOracle.authority !== 'TESTER_CONFIRMATION'
+  ) return false;
+  return approval.expectedAfter !== undefined
+    && isDeepStrictEqual(approval.expectedAfter, expected);
 }

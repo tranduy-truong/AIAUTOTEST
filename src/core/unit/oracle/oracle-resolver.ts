@@ -1,6 +1,7 @@
 import type {
   UnitContextBundle,
   UnitExpectedResult,
+  UnitOracleEvidence,
   UnitPlannedTestCase,
   UnitTarget,
 } from '../schema.js';
@@ -8,6 +9,7 @@ import { validateExpectedIntent } from '../test-intent.schema.js';
 import { dataValueToRuntime, evaluateTargetStatically, runtimeValuesEqual } from './ast-evaluator.js';
 import {
   ComprehensiveOracle,
+  hasValidTesterApprovalAudit,
   OracleGateResult,
   OracleGateStatus,
 } from './oracle-taxonomy.js';
@@ -48,6 +50,42 @@ function expectedErrorMatches(
   return true;
 }
 
+function specificationConflict(
+  target: UnitTarget,
+  testCase: UnitPlannedTestCase,
+): { expected: unknown; actual: unknown } | undefined {
+  const evaluated = evaluateTargetStatically(target, testCase.inputs, testCase.mocks);
+  if (!evaluated.supported) return undefined;
+  const expectsThrow = testCase.expected.kind === 'throw' || testCase.expected.kind === 'reject';
+  const matches = evaluated.kind === 'throw'
+    ? expectsThrow && expectedErrorMatches(testCase.expected, evaluated)
+    : !expectsThrow
+      && ['return', 'resolve'].includes(testCase.expected.kind)
+      && runtimeValuesEqual(evaluated.value, dataValueToRuntime(testCase.expected.value!));
+  if (matches) return undefined;
+  return {
+    expected: testCase.expected.value !== undefined ? testCase.expected.value : testCase.expected.kind,
+    actual: evaluated.kind === 'throw'
+      ? `${evaluated.errorClass}: ${evaluated.message}`
+      : evaluated.value,
+  };
+}
+
+function conflictResolution(
+  testCase: UnitPlannedTestCase,
+  oracle: ComprehensiveOracle,
+  conflict: { expected: unknown; actual: unknown },
+): UnitOracleGateResolution {
+  return {
+    testCaseId: testCase.id,
+    gateStatus: 'CONFLICT_WITH_SPEC',
+    oracle,
+    reason: `Mâu thuẫn với Specification: mong đợi ${JSON.stringify(conflict.expected)} nhưng implementation hiện tại trả về ${JSON.stringify(conflict.actual)}`,
+    specExpected: testCase.expected,
+    errors: ['Source implementation conflicts with specification'],
+  };
+}
+
 export function evaluateOracleGate(
   context: Pick<UnitContextBundle, 'requirements'>,
   target: UnitTarget,
@@ -67,22 +105,15 @@ export function evaluateOracleGate(
     };
   }
 
-  // Handle sandbox observation legacy case
-  if (rawTestCase.oracleEvidence?.source === 'sandbox-observation') {
-    return {
-      testCaseId: testCase.id,
-      gateStatus: 'NEEDS_ORACLE',
-      oracle,
-      reason: 'Sandbox observation chỉ là characterization, chưa phải expected nghiệp vụ đã xác minh.',
-      errors: ['Sandbox observation chỉ là characterization, chưa phải expected nghiệp vụ đã xác minh.'],
-    };
-  }
-
   // 1. SPECIFICATION từ Requirement hoặc Tester Confirmation
   if (oracle.intentType === 'SPECIFICATION') {
     if (oracle.authority === 'REQUIREMENT') {
       const reference = oracle.evidence.reference?.trim();
-      if (!reference) {
+      if (
+        oracle.evidence.status !== 'VERIFIED'
+        || oracle.evidence.method !== 'REQUIREMENT_REFERENCE'
+        || !reference
+      ) {
         return {
           testCaseId: testCase.id,
           gateStatus: 'NEEDS_ORACLE',
@@ -101,33 +132,8 @@ export function evaluateOracleGate(
         };
       }
 
-      // Static Evaluation check for CONFLICT_WITH_SPEC
-      const evaluated = evaluateTargetStatically(target, testCase.inputs, testCase.mocks);
-      if (evaluated.supported) {
-        const expectsThrow = testCase.expected.kind === 'throw' || testCase.expected.kind === 'reject';
-        let conflictDetected = false;
-        if (evaluated.kind === 'throw') {
-          if (!expectsThrow || !expectedErrorMatches(testCase.expected, evaluated)) {
-            conflictDetected = true;
-          }
-        } else {
-          if (expectsThrow || !['return', 'resolve'].includes(testCase.expected.kind) ||
-              !runtimeValuesEqual(evaluated.value, dataValueToRuntime(testCase.expected.value!))) {
-            conflictDetected = true;
-          }
-        }
-
-        if (conflictDetected) {
-          return {
-            testCaseId: testCase.id,
-            gateStatus: 'CONFLICT_WITH_SPEC',
-            oracle,
-            reason: `Mâu thuẫn với Requirement: Requirement mong đợi ${JSON.stringify(testCase.expected.value || testCase.expected.kind)} nhưng implementation hiện tại trả về ${JSON.stringify(evaluated.value || evaluated.kind)}`,
-            specExpected: testCase.expected, // VẪN LƯU SPEC EXPECTED ĐỂ GENERATOR SINH TEST CÁCH LỖI
-            errors: ['Source implementation conflicts with requirement specification'],
-          };
-        }
-      }
+      const conflict = specificationConflict(target, testCase);
+      if (conflict) return conflictResolution(testCase, oracle, conflict);
 
       return {
         testCaseId: testCase.id,
@@ -139,15 +145,17 @@ export function evaluateOracleGate(
     }
 
     if (oracle.authority === 'TESTER_CONFIRMATION') {
-      if (rawTestCase.oracleEvidence && !rawTestCase.oracleEvidence.reference?.trim()) {
+      if (!hasValidTesterApprovalAudit(oracle, testCase.expected)) {
         return {
           testCaseId: testCase.id,
           gateStatus: 'NEEDS_ORACLE',
           oracle,
-          reason: 'Xác nhận của tester thiếu audit reference hợp lệ từ CLI.',
-          errors: ['Xác nhận của tester thiếu audit reference hợp lệ từ CLI.'],
+          reason: 'Xác nhận tester không có audit entry hợp lệ từ phiên interactive.',
+          errors: ['Xác nhận tester thiếu audit APPROVE_EXPECTED/REPLACE_EXPECTED hợp lệ.'],
         };
       }
+      const conflict = specificationConflict(target, testCase);
+      if (conflict) return conflictResolution(testCase, oracle, conflict);
       return {
         testCaseId: testCase.id,
         gateStatus: 'READY_SPECIFICATION',
@@ -160,6 +168,41 @@ export function evaluateOracleGate(
 
   // 2. CHARACTERIZATION từ Static Evaluation / Implementation
   if (oracle.intentType === 'CHARACTERIZATION') {
+    if (oracle.authority === 'EXISTING_TEST') {
+      if (
+        oracle.evidence.status === 'VERIFIED'
+        && oracle.evidence.method === 'EXISTING_TEST_REFERENCE'
+        && oracle.evidence.reference?.trim()
+      ) {
+        return {
+          testCaseId: testCase.id,
+          gateStatus: 'READY_CHARACTERIZATION',
+          oracle,
+          errors: [],
+        };
+      }
+      return {
+        testCaseId: testCase.id,
+        gateStatus: 'INVALID_EVIDENCE',
+        oracle,
+        reason: 'Existing test characterization thiếu reference đã xác minh.',
+        errors: ['Existing test characterization thiếu reference đã xác minh.'],
+      };
+    }
+
+    if (
+      oracle.evidence.method === 'SANDBOX_OBSERVATION'
+      && oracle.evidence.status === 'OBSERVED'
+      && oracle.evidence.reference?.trim()
+    ) {
+      return {
+        testCaseId: testCase.id,
+        gateStatus: 'READY_CHARACTERIZATION',
+        oracle,
+        errors: [],
+      };
+    }
+
     const evaluated = evaluateTargetStatically(target, testCase.inputs, testCase.mocks);
     if (!evaluated.supported) {
       return {
@@ -200,7 +243,15 @@ export function evaluateOracleGate(
     return {
       testCaseId: testCase.id,
       gateStatus: 'READY_CHARACTERIZATION',
-      oracle,
+      oracle: {
+        ...oracle,
+        evidence: {
+          ...oracle.evidence,
+          status: 'VERIFIED',
+          method: testCase.mocks.length > 0 ? 'MOCK_TRACE' : 'STATIC_EVALUATION',
+          reference: oracle.evidence.reference || evaluated.expression,
+        },
+      },
       errors: [],
     };
   }
@@ -228,7 +279,7 @@ export type UnitOracleResolutionStatus = 'VERIFIED' | 'NEEDS_ORACLE';
 export interface UnitOracleResolution {
   testCaseId: string;
   status: UnitOracleResolutionStatus;
-  evidence?: unknown;
+  evidence?: UnitOracleEvidence;
   errors: string[];
 }
 
@@ -240,16 +291,20 @@ export function resolveUnitTestOracle(
   const gate = evaluateOracleGate(context, target, testCase);
   if (gate.gateStatus === 'READY_SPECIFICATION' || gate.gateStatus === 'READY_CHARACTERIZATION' || gate.gateStatus === 'CONFLICT_WITH_SPEC') {
     const evaluated = evaluateTargetStatically(target, testCase.inputs, testCase.mocks);
-    let evidenceSource = evaluated.supported ? (testCase.mocks && testCase.mocks.length > 0 ? 'mock-trace' : 'pure-evaluation') : 'ai-inference';
-    if (testCase.oracleSource === 'tester-confirmation' || testCase.oracleEvidence?.source === 'tester-confirmation') {
+    let evidenceSource: UnitOracleEvidence['source'] = evaluated.supported
+      ? (testCase.mocks && testCase.mocks.length > 0 ? 'mock-trace' : 'pure-evaluation')
+      : 'ai-inference';
+    if (gate.oracle.authority === 'TESTER_CONFIRMATION') {
       evidenceSource = 'tester-confirmation';
-    } else if (testCase.oracleSource === 'requirement' || testCase.oracleEvidence?.source === 'requirement') {
+    } else if (gate.oracle.authority === 'REQUIREMENT') {
       evidenceSource = 'requirement';
     }
 
     const legacySource = testCase.oracleEvidence?.source;
-    const finalSource = (legacySource && legacySource !== 'ai-inference' && legacySource !== 'proposed') 
-      ? legacySource 
+    const finalSource = ['TESTER_CONFIRMATION', 'REQUIREMENT'].includes(gate.oracle.authority)
+      ? evidenceSource
+      : (legacySource && legacySource !== 'ai-inference')
+      ? legacySource
       : evidenceSource;
 
     return {
@@ -259,7 +314,8 @@ export function resolveUnitTestOracle(
         status: 'verified',
         source: finalSource,
         reference: testCase.oracleEvidence?.reference || gate.oracle.evidence.reference,
-        expression: testCase.oracleEvidence?.expression || evaluated.expression,
+        expression: testCase.oracleEvidence?.expression
+          || (evaluated.supported ? evaluated.expression : undefined),
       },
       errors: [],
     };

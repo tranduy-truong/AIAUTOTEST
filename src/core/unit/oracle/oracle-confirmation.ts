@@ -82,10 +82,6 @@ function loadPreviousConfirmations(session: UnitSession): UnitOracleConfirmation
   return Array.isArray(parsed.confirmations) ? parsed.confirmations : [];
 }
 
-function confirmationKey(value: Pick<UnitOracleConfirmation, 'target' | 'testCaseId'>): string {
-  return `${value.target}::${value.testCaseId}`;
-}
-
 export function applyUnitOracleConfirmations(
   confirmations: UnitOracleConfirmation[],
   session = loadUnitSession(),
@@ -123,6 +119,9 @@ export function applyUnitOracleConfirmations(
 
     const previousExpected = testCase.expected;
     const actorType = confirmation.actorType || 'LOCAL_TESTER';
+    if (actorType !== 'LOCAL_TESTER') {
+      throw new Error(`${confirmation.testCaseId}: CI không được phê duyệt hoặc thay thế expected result.`);
+    }
     const note = confirmation.note?.trim() || 'Expected đã được xác nhận và nâng cấp thành Specification qua CLI.';
 
     testCase.expected = confirmation.expected;
@@ -146,6 +145,7 @@ export function applyUnitOracleConfirmations(
         testCase.oracle!,
         actorType,
         note,
+        confirmation.expected,
       );
     }
 
@@ -163,12 +163,13 @@ export function applyUnitOracleConfirmations(
 
   if (confirmedCount > 0) saveUnitPlan(plan, session, cwd);
 
-  const merged = new Map(loadPreviousConfirmations(session).map(item => [confirmationKey(item), item]));
-  for (const confirmation of confirmations) merged.set(confirmationKey(confirmation), confirmation);
+  // Keep every decision as an append-only event. Re-reviewing the same test
+  // case must not erase who approved or replaced an earlier expected value.
+  const history = loadPreviousConfirmations(session);
   const artifact: OracleConfirmationArtifact = {
     version: 2,
     updatedAt: new Date().toISOString(),
-    confirmations: [...merged.values()],
+    confirmations: [...history, ...confirmations],
   };
   fs.writeFileSync(oracleConfirmationsPath(session), `${JSON.stringify(artifact, null, 2)}\n`);
 

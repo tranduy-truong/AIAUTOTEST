@@ -11,8 +11,14 @@ import { runHealer } from "./agents/healer/run.js";
 import { plannerPlanToTestCases } from "./agents/planner/schema.js";
 import { buildActionPlan } from "./core/action-plan.js";
 import { buildCompactDomReport, runLive } from "./agents/crawler/live-runner.js";
-import { analyzeUnitInput, createUnitSession } from "./core/unit/artifacts.js";
+import {
+  analyzeUnitInput,
+  createUnitSession,
+  loadUnitContext,
+  loadUnitSession,
+} from "./core/unit/artifacts.js";
 import { runLastGeneratedUnitTests, summarizeUnitRunOutput } from "./core/unit/runner.js";
+import { evaluateUnitPlanOracleGates } from "./core/unit/oracle/oracle-gate-summary.js";
 import { runUnitCoverageGuidedLoop } from "./agents/planner/unit-coverage-loop.js";
 import {
   applyUnitOracleConfirmations,
@@ -28,15 +34,24 @@ import {
   error as uiError,
   header,
   menuChoice,
+  oracleSummary,
   paint,
   profile,
   section,
   success,
   summary,
+  testExecutionSummary,
   warning,
 } from "./core/cli-ui.js";
 
 const harness = new TestPolicyHarness();
+
+function loadCurrentUnitOracleGateReport() {
+  const session = loadUnitSession();
+  const context = loadUnitContext(session);
+  const plan = JSON.parse(fs.readFileSync(session.planPath, "utf-8"));
+  return evaluateUnitPlanOracleGates(context, plan);
+}
 
 // 1. MENU CHÍNH CỦA ỨNG DỤNG
 async function mainMenu() {
@@ -611,6 +626,13 @@ async function runTests(level) {
   section("RUN", `Chạy ${level.toUpperCase()}`, "Thực thi test và tổng hợp kết quả");
 
   if (level === "unit") {
+    let gateReport;
+    try {
+      gateReport = loadCurrentUnitOracleGateReport();
+      oracleSummary(gateReport.counts);
+    } catch (error) {
+      warning(`Chưa đọc được Oracle Gate của phiên hiện tại: ${error.message}`);
+    }
     let unitResult;
     try {
       unitResult = runLastGeneratedUnitTests();
@@ -629,6 +651,16 @@ async function runTests(level) {
     ], unitResult.ok ? "success" : "error");
     if (unitResult.ok) {
       success("Tất cả Unit Test đã pass.");
+      if (gateReport) {
+        testExecutionSummary({
+          specPassed: gateReport.counts.specRequirement + gateReport.counts.specTesterConfirmed,
+          specTotal: gateReport.counts.specRequirement + gateReport.counts.specTesterConfirmed,
+          charPassed: gateReport.counts.characterization,
+          charTotal: gateReport.counts.characterization,
+          conflicts: gateReport.counts.sourceConflict,
+          needsOracle: gateReport.counts.needsOracle,
+        });
+      }
       unitResult.coverageEnabled
         ? success("Coverage đã được ghi nhận.")
         : warning("Test đã pass nhưng dự án chưa có coverage provider.");
@@ -761,6 +793,15 @@ async function runCliEntrypoint() {
 
     try {
       if (targetLevel === "unit") {
+        const gateReport = loadCurrentUnitOracleGateReport();
+        oracleSummary(gateReport.counts);
+        if (!gateReport.canRunInCi) {
+          uiError("Oracle Gate từ chối chạy CI: còn conflict hoặc expected chưa được xác minh.");
+          for (const reason of gateReport.blockingReasons.slice(0, 5)) {
+            detail("Bị chặn", reason);
+          }
+          process.exit(1);
+        }
         const unitResult = runLastGeneratedUnitTests();
         const runSummary = summarizeUnitRunOutput(unitResult.stdout, unitResult.stderr);
 
@@ -769,6 +810,14 @@ async function runCliEntrypoint() {
           process.exit(1);
         } else {
           success("Tất cả Unit Test đã pass thành công trong CI.");
+          testExecutionSummary({
+            specPassed: gateReport.counts.specRequirement + gateReport.counts.specTesterConfirmed,
+            specTotal: gateReport.counts.specRequirement + gateReport.counts.specTesterConfirmed,
+            charPassed: gateReport.counts.characterization,
+            charTotal: gateReport.counts.characterization,
+            conflicts: gateReport.counts.sourceConflict,
+            needsOracle: gateReport.counts.needsOracle,
+          });
           process.exit(0);
         }
       } else if (targetLevel === "integration") {

@@ -1,4 +1,4 @@
-﻿name: Integration Tests (Vitest + Sandbox)
+name: Integration Tests (Vitest + Sandbox)
 
 on:
   push:
@@ -16,7 +16,7 @@ jobs:
         with:
           node-version: "20"
           cache: npm
-      - run: npm ci
+      - run: npm install
       - name: Run integration tests (SQLite sandbox - no Docker required)
         run: npm run test:integration
         env:
@@ -27,6 +27,7 @@ jobs:
         with:
           name: integration-artifacts
           path: artifacts/
+          if-no-files-found: ignore
           retention-days: 7
 
 # To enable real Postgres/MySQL via Testcontainers, add under jobs.integration:

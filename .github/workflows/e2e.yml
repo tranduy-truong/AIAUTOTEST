@@ -1,4 +1,4 @@
-﻿name: E2E Tests (Playwright)
+name: E2E Tests (Playwright)
 
 on:
   push:
@@ -16,7 +16,7 @@ jobs:
         with:
           node-version: "20"
           cache: npm
-      - run: npm ci
+      - run: npm install
       - run: npx playwright install --with-deps chromium
 
       - name: Prepare auth config (optional)
@@ -44,4 +44,5 @@ jobs:
         with:
           name: e2e-artifacts
           path: artifacts/
+          if-no-files-found: ignore
           retention-days: 7

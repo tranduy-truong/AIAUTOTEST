@@ -1,4 +1,4 @@
-﻿name: Unit Tests (Vitest)
+name: Unit Tests (Vitest)
 
 on:
   push:
@@ -16,7 +16,7 @@ jobs:
         with:
           node-version: "20"
           cache: npm
-      - run: npm ci
+      - run: npm install
       - name: TypeScript typecheck
         run: npm run typecheck:core
       - name: Run unit tests
@@ -27,4 +27,5 @@ jobs:
         with:
           name: unit-test-results
           path: artifacts/
+          if-no-files-found: ignore
           retention-days: 7

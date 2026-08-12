@@ -78,8 +78,15 @@ function moduleFactory(dependency: UnitDependency, operations: MockOperation[]):
       objectPropertyName(operation.operation),
       f.createPropertyAccessExpression(f.createIdentifier('unitMocks'), operation.handle),
     ));
-  const defaultValue = operations.length === 1 && dependency.usedMembers?.[0] === dependency.importedNames[0]
-    ? f.createPropertyAccessExpression(f.createIdentifier('unitMocks'), operations[0].handle)
+  const defaultBinding = dependency.importBindings?.find(binding => binding.kind === 'default');
+  const directlyCalledDefault = defaultBinding
+    ? operations.find(operation => operation.operation === defaultBinding.localName)
+    : undefined;
+  // Node/CommonJS interop may read a synthetic default even for named imports.
+  // Without a real default import, expose the complete module object instead
+  // of incorrectly making the first named function the default export.
+  const defaultValue = directlyCalledDefault
+    ? f.createPropertyAccessExpression(f.createIdentifier('unitMocks'), directlyCalledDefault.handle)
     : f.createObjectLiteralExpression(operationProperties, true);
   return f.createArrowFunction(
     undefined, undefined, [], undefined, f.createToken(ts.SyntaxKind.EqualsGreaterThanToken),

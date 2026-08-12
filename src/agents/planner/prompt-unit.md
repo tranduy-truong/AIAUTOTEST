@@ -108,7 +108,7 @@ Chỉ xuất một JSON object, không dùng markdown:
           "oracleSource": "requirement | type-contract | existing-test | implementation",
           "oracleEvidence": {
             "status": "verified | proposed | observed",
-            "source": "requirement | existing-test | return-literal | throw-literal | pure-evaluation | sandbox-observation | ai-inference",
+            "source": "requirement | existing-test | return-literal | throw-literal | pure-evaluation | mock-trace | sandbox-observation | ai-inference",
             "reference": "đoạn nguyên văn trong requirements nếu source=requirement"
           },
           "mocks": [

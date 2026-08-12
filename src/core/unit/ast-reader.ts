@@ -84,6 +84,7 @@ function classifyBoundary(moduleName: string): UnitDependency['boundary'] {
 interface ImportInfo {
   module: string;
   importedNames: string[];
+  importBindings?: NonNullable<UnitDependency['importBindings']>;
   external: boolean;
   boundary: UnitDependency['boundary'];
   resolvedFile?: string;
@@ -95,15 +96,29 @@ function importsForFile(source: ts.SourceFile, root: string, relativeFile: strin
     if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) continue;
     const moduleName = statement.moduleSpecifier.text;
     const importedNames: string[] = [];
+    const importBindings: NonNullable<UnitDependency['importBindings']> = [];
     const clause = statement.importClause;
-    if (clause?.name) importedNames.push(clause.name.text);
+    if (clause?.name) {
+      importedNames.push(clause.name.text);
+      importBindings.push({ kind: 'default', localName: clause.name.text, importedName: 'default' });
+    }
     if (clause?.namedBindings) {
-      if (ts.isNamespaceImport(clause.namedBindings)) importedNames.push(clause.namedBindings.name.text);
-      else importedNames.push(...clause.namedBindings.elements.map(element => element.name.text));
+      if (ts.isNamespaceImport(clause.namedBindings)) {
+        importedNames.push(clause.namedBindings.name.text);
+        importBindings.push({ kind: 'namespace', localName: clause.namedBindings.name.text, importedName: '*' });
+      } else {
+        importedNames.push(...clause.namedBindings.elements.map(element => element.name.text));
+        importBindings.push(...clause.namedBindings.elements.map(element => ({
+          kind: 'named' as const,
+          localName: element.name.text,
+          importedName: element.propertyName?.text || element.name.text,
+        })));
+      }
     }
     imports.push({
       module: moduleName,
       importedNames,
+      importBindings,
       external: !moduleName.startsWith('.'),
       boundary: classifyBoundary(`${moduleName} ${importedNames.join(' ')}`),
       resolvedFile: resolveInternalModule(root, relativeFile, moduleName),
@@ -125,6 +140,7 @@ function dependenciesForTarget(
     aggregated.set(key, {
       module: item.module,
       importedNames: [...new Set([...(existing?.importedNames || []), ...importedNames])],
+      importBindings: existing?.importBindings,
       external: !item.module.startsWith('.'),
       boundary: classifyBoundary(`${item.module} ${item.importedNames.join(' ')}`),
       resolvedFile: item.resolvedFile,
@@ -143,6 +159,10 @@ function dependenciesForTarget(
         ...existing.importedNames.filter(name => name !== 'default' && name !== '*'),
         ...item.importedNames,
       ])],
+      importBindings: [...new Map([
+        ...(existing.importBindings || []),
+        ...(item.importBindings || []),
+      ].map(binding => [`${binding.kind}:${binding.localName}:${binding.importedName}`, binding])).values()],
     });
   }
   // Side-effect imports in the target module execute as soon as the real target

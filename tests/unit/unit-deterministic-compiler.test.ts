@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { compileUnitTestFile } from '../../src/core/unit/compiler/test-file-compiler.js';
 import { analyzeUnitInput } from '../../src/core/unit/artifacts.js';
 import {
+  prepareOracleVerifiedPlan,
   typecheckGeneratedUnitFile,
   validateGeneratedUnitCode,
 } from '../../src/agents/generator/unit-generator.js';
@@ -174,5 +175,59 @@ describe('Deterministic Unit Compiler', () => {
       expect.objectContaining({ testCaseId: 'UT_OLLAMA_RUN_001', status: 'GENERATED' }),
       expect.objectContaining({ testCaseId: 'UT_OLLAMA_RUN_002', status: 'NEEDS_ORACLE' }),
     ]));
+  });
+
+  it('generates and runs OllamaAdapter.isAvailable from verified process mock traces', () => {
+    const analysis = analyzeUnitInput(process.cwd());
+    const target = analysis.index.targets.find(item => item.id === 'src/adapters/ollama.ts#OllamaAdapter.isAvailable')!;
+    const plan: UnitPlanTarget = {
+      sourceFile: target.sourceFile, symbol: target.symbol, sourceHash: target.sourceHash,
+      executionMode: target.executionMode, profile: target.profile,
+      testCases: [
+        {
+          id: 'UT_OLLAMA_AVAILABLE_001', name: 'returns true when Ollama command is available',
+          branchIds: ['B001_TRY'], inputs: {}, constructorInputs: {},
+          expected: { kind: 'resolve', value: true }, oracleSource: 'implementation',
+          oracleEvidence: { status: 'proposed', source: 'ai-inference' },
+          mocks: [{ module: 'child_process', symbol: 'execSync', behavior: { kind: 'return', value: '' } }],
+        },
+        {
+          id: 'UT_OLLAMA_AVAILABLE_002', name: 'returns false when Ollama command is unavailable',
+          branchIds: ['B001_CATCH'], inputs: {}, constructorInputs: {},
+          expected: { kind: 'resolve', value: false }, oracleSource: 'implementation',
+          oracleEvidence: { status: 'proposed', source: 'ai-inference' },
+          mocks: [{ module: 'child_process', symbol: 'execSync', behavior: { kind: 'throw', message: 'not installed' } }],
+        },
+      ],
+    };
+    const prepared = prepareOracleVerifiedPlan({}, target, plan);
+    expect(prepared.unresolvedCases).toEqual([]);
+    expect(prepared.resolutions).toEqual([
+      expect.objectContaining({ status: 'VERIFIED', evidence: expect.objectContaining({ source: 'mock-trace' }) }),
+      expect.objectContaining({ status: 'VERIFIED', evidence: expect.objectContaining({ source: 'mock-trace' }) }),
+    ]);
+    const dependencyPaths = new Map(target.dependencies.map(dependency => [dependency.module, dependency.module]));
+    const compiled = compileUnitTestFile({
+      target, planTarget: prepared.planTarget, framework: 'vitest',
+      importPath: '../../../src/adapters/ollama.js', dependencyPaths,
+    });
+    expect(compiled.testCases.every(testCase => testCase.status === 'GENERATED')).toBe(true);
+    expect(compiled.code).toContain('vi.mock("child_process"');
+
+    const generatedDirectory = path.join(process.cwd(), 'tests', 'unit', 'ai-generated');
+    const testFile = path.join(generatedDirectory, '.ollama-availability-generated.test.ts');
+    try {
+      fs.mkdirSync(generatedDirectory, { recursive: true });
+      fs.writeFileSync(testFile, compiled.code!);
+      expect(typecheckGeneratedUnitFile(process.cwd(), testFile)).toEqual([]);
+      const executed = spawnSync(process.execPath, [
+        path.join(process.cwd(), 'node_modules', 'vitest', 'vitest.mjs'),
+        'run', testFile,
+      ], { cwd: process.cwd(), encoding: 'utf-8' });
+      expect(`${executed.stdout}\n${executed.stderr}`).toContain('2 passed');
+      expect(executed.status).toBe(0);
+    } finally {
+      fs.rmSync(testFile, { force: true });
+    }
   });
 });

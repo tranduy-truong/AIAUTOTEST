@@ -1,5 +1,10 @@
 import * as ts from 'typescript';
-import type { UnitDataValue, UnitTarget } from '../schema.js';
+import type {
+  UnitDataValue,
+  UnitMockOutcome,
+  UnitMockPlan,
+  UnitTarget,
+} from '../schema.js';
 
 export type StaticEvaluationOutcome =
   | { supported: true; kind: 'return'; value: unknown; expression: string }
@@ -17,6 +22,21 @@ class StaticReturnValue {
 interface StaticCallable {
   __staticCallable: true;
   invoke(args: unknown[]): unknown;
+}
+
+interface StaticPromiseValue {
+  __staticPromise: true;
+  state: 'resolved' | 'rejected';
+  value: unknown;
+}
+
+function isStaticCallable(value: unknown): value is StaticCallable {
+  return isRecord(value) && value.__staticCallable === true && typeof value.invoke === 'function';
+}
+
+function isStaticPromise(value: unknown): value is StaticPromiseValue {
+  return isRecord(value) && value.__staticPromise === true
+    && ['resolved', 'rejected'].includes(String(value.state));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -142,8 +162,8 @@ function evaluateSafeCall(node: ts.CallExpression, env: Map<string, unknown>): u
   const args = node.arguments.map(argument => evaluateExpression(argument, env));
   if (ts.isIdentifier(node.expression)) {
     const local = env.get(node.expression.text);
-    if (isRecord(local) && local.__staticCallable === true && typeof local.invoke === 'function') {
-      return (local as unknown as StaticCallable).invoke(args);
+    if (isStaticCallable(local)) {
+      return local.invoke(args);
     }
     switch (node.expression.text) {
       case 'Number': return Number(args[0]);
@@ -164,6 +184,9 @@ function evaluateSafeCall(node: ts.CallExpression, env: Map<string, unknown>): u
   if (ts.isPropertyAccessExpression(node.expression)) {
     const receiver = evaluateExpression(node.expression.expression, env);
     const method = node.expression.name.text;
+    if (isRecord(receiver) && isStaticCallable(receiver[method])) {
+      return receiver[method].invoke(args);
+    }
     if (typeof receiver === 'string') {
       switch (method) {
         case 'trim': return receiver.trim();
@@ -219,6 +242,12 @@ function evaluateExpression(node: ts.Expression, env: Map<string, unknown>): unk
   if (ts.isVoidExpression(node)) {
     evaluateExpression(node.expression, env);
     return undefined;
+  }
+  if (ts.isAwaitExpression(node)) {
+    const awaited = evaluateExpression(node.expression, env);
+    if (!isStaticPromise(awaited)) return awaited;
+    if (awaited.state === 'rejected') throw awaited.value;
+    return awaited.value;
   }
   if (ts.isBinaryExpression(node)) return evaluateBinary(node, env);
   if (ts.isConditionalExpression(node)) {
@@ -292,6 +321,23 @@ function executeStatement(statement: ts.Statement, env: Map<string, unknown>): v
     }
     return;
   }
+  if (ts.isTryStatement(statement)) {
+    try {
+      executeStatement(statement.tryBlock, env);
+    } catch (error) {
+      // Return control flow and evaluator limitations must never be mistaken
+      // for an exception thrown by the target under test.
+      if (error instanceof StaticReturnValue || error instanceof UnsupportedStaticEvaluation) throw error;
+      if (!statement.catchClause) throw error;
+      const catchEnv = new Map(env);
+      const catchVariable = statement.catchClause.variableDeclaration?.name;
+      if (catchVariable && ts.isIdentifier(catchVariable)) catchEnv.set(catchVariable.text, error);
+      executeStatement(statement.catchClause.block, catchEnv);
+    } finally {
+      if (statement.finallyBlock) executeStatement(statement.finallyBlock, env);
+    }
+    return;
+  }
   if (ts.isReturnStatement(statement)) {
     throw new StaticReturnValue(statement.expression ? evaluateExpression(statement.expression, env) : undefined, statement.getText());
   }
@@ -305,7 +351,11 @@ function executeStatement(statement: ts.Statement, env: Map<string, unknown>): v
       env.set(statement.expression.left.text, evaluateExpression(statement.expression.right, env));
       return;
     }
-    throw new UnsupportedStaticEvaluation('Expression statement có side effect không được thực thi tĩnh.');
+    // Calls only reach this point through evaluateSafeCall. Real IO/process
+    // functions are absent from the environment; structured mock callables are
+    // therefore safe to trace and their return value may be discarded.
+    evaluateExpression(statement.expression, env);
+    return;
   }
   if (ts.isEmptyStatement(statement)) return;
   throw new UnsupportedStaticEvaluation(`Statement ${ts.SyntaxKind[statement.kind]} chưa được hỗ trợ an toàn.`);
@@ -377,16 +427,109 @@ function callableFromCode(code: string, parentEnv: Map<string, unknown>): Static
   };
 }
 
+function mockOutcomeValue(outcome: UnitMockOutcome): unknown {
+  const properties = Object.fromEntries(Object.entries(outcome.properties || {})
+    .map(([key, value]) => [key, dataValueToRuntime(value)]));
+  const methods = Object.fromEntries(Object.entries(outcome.methods || {})
+    .map(([key, behavior]) => [key, mockCallable(behavior)]));
+  if (Object.keys(properties).length > 0 || Object.keys(methods).length > 0) {
+    return { ...properties, ...methods };
+  }
+  return outcome.value === undefined ? undefined : dataValueToRuntime(outcome.value);
+}
+
+function mockError(outcome: UnitMockOutcome): unknown {
+  return outcome.value === undefined
+    ? new Error(outcome.message || 'Mock error')
+    : dataValueToRuntime(outcome.value);
+}
+
+function applyMockOutcome(outcome: UnitMockOutcome): unknown {
+  if (outcome.kind === 'throw') throw mockError(outcome);
+  if (outcome.kind === 'reject') {
+    return { __staticPromise: true, state: 'rejected', value: mockError(outcome) } satisfies StaticPromiseValue;
+  }
+  const value = mockOutcomeValue(outcome);
+  if (outcome.kind === 'resolve') {
+    return { __staticPromise: true, state: 'resolved', value } satisfies StaticPromiseValue;
+  }
+  return value;
+}
+
+function mockCallable(behavior: UnitMockOutcome & { sequence?: UnitMockOutcome[] }): StaticCallable {
+  let callIndex = 0;
+  return {
+    __staticCallable: true,
+    invoke(): unknown {
+      const sequence = behavior.sequence || [];
+      const outcome = callIndex < sequence.length ? sequence[callIndex] : behavior;
+      callIndex++;
+      return applyMockOutcome(outcome);
+    },
+  };
+}
+
+function installMockEnvironment(
+  env: Map<string, unknown>,
+  target: UnitTarget,
+  mocks: UnitMockPlan[],
+): string | undefined {
+  const mocksByModule = new Map<string, UnitMockPlan[]>();
+  for (const mock of mocks) {
+    const current = mocksByModule.get(mock.module) || [];
+    current.push(mock);
+    mocksByModule.set(mock.module, current);
+  }
+  for (const dependency of target.dependencies.filter(item => item.strategy === 'mock')) {
+    const plans = mocksByModule.get(dependency.module) || [];
+    const operations = dependency.usedMembers?.length
+      ? dependency.usedMembers
+      : dependency.importedNames;
+    const operationValues: Record<string, StaticCallable> = {};
+    for (const operation of operations) {
+      const plan = plans.find(item => item.symbol === operation)
+        || (operations.length === 1 ? plans[0] : undefined);
+      if (!plan) return `Thiếu mock plan cho ${dependency.module}#${operation}.`;
+      operationValues[operation] = mockCallable(plan.behavior);
+    }
+    if (dependency.mockKind === 'global') {
+      for (const operation of operations) {
+        const callable = operationValues[operation];
+        env.set(operation, callable);
+        if (dependency.globalName) {
+          env.set(dependency.globalName, callable);
+          const [owner, member] = dependency.globalName.split('.');
+          if (member) {
+            const existingOwner = isRecord(env.get(owner)) ? env.get(owner) as Record<string, unknown> : {};
+            env.set(owner, { ...existingOwner, [member]: callable });
+          } else env.set(dependency.globalName, callable);
+        }
+      }
+      continue;
+    }
+    // Named imports are callable directly; namespace/default imports receive
+    // an object with the statically verified member functions.
+    for (const importedName of dependency.importedNames) {
+      if (operationValues[importedName]) env.set(importedName, operationValues[importedName]);
+      else env.set(importedName, operationValues);
+    }
+    for (const [operation, callable] of Object.entries(operationValues)) {
+      if (!env.has(operation)) env.set(operation, callable);
+    }
+  }
+  return undefined;
+}
+
 export function evaluateTargetStatically(
   target: UnitTarget,
   inputs: Record<string, UnitDataValue>,
+  mocks: UnitMockPlan[] = [],
 ): StaticEvaluationOutcome {
-  if (target.dependencies.some(dependency => dependency.strategy === 'mock')) {
-    return { supported: false, reason: 'Target có dependency mock; static evaluator không mô phỏng side effect.' };
-  }
   const callable = findBody(target);
   if (!callable) return { supported: false, reason: 'Không tìm thấy function/method body.' };
   const env = new Map<string, unknown>();
+  const mockError = installMockEnvironment(env, target, mocks);
+  if (mockError) return { supported: false, reason: mockError };
   for (const definition of target.supportingContext.constantDefinitions) {
     const source = ts.createSourceFile('oracle-constant.ts', definition.code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
     const declaration = source.statements.flatMap(statement =>

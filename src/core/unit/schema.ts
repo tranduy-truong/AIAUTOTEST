@@ -35,6 +35,11 @@ export interface UnitProjectManifest {
 export interface UnitDependency {
   module: string;
   importedNames: string[];
+  importBindings?: Array<{
+    kind: 'default' | 'named' | 'namespace';
+    localName: string;
+    importedName: string;
+  }>;
   external: boolean;
   boundary:
     | 'database'
@@ -211,6 +216,7 @@ export type UnitOracleEvidenceSource =
   | 'return-literal'
   | 'throw-literal'
   | 'pure-evaluation'
+  | 'mock-trace'
   | 'sandbox-observation'
   | 'ai-inference';
 

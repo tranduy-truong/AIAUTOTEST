@@ -17,7 +17,7 @@ const errorClasses = new Set(['Error', 'TypeError', 'RangeError', 'SyntaxError',
 const evidenceStatuses = new Set(['verified', 'proposed', 'observed']);
 const evidenceSources = new Set([
   'requirement', 'existing-test', 'return-literal', 'throw-literal',
-  'pure-evaluation', 'sandbox-observation', 'ai-inference',
+  'pure-evaluation', 'mock-trace', 'sandbox-observation', 'ai-inference',
 ]);
 
 export function validateExpectedIntent(expected: UnitExpectedResult, path = 'expected'): TestIntentSchemaIssue[] {

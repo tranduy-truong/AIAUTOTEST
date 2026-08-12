@@ -70,7 +70,61 @@ describe('Unit Oracle Resolver', () => {
     };
     const result = resolveUnitTestOracle({}, ioTarget, planned(5));
     expect(result.status).toBe('NEEDS_ORACLE');
-    expect(result.errors.join(' ')).toContain('dependency mock');
+    expect(result.errors.join(' ')).toContain('Thiếu mock plan');
+  });
+
+  it('proves both try/catch outcomes from structured process mocks without running the process', () => {
+    const analysisTarget: UnitTarget = {
+      id: 'src/adapters/ollama.ts#OllamaAdapter.isAvailable',
+      sourceFile: 'src/adapters/ollama.ts', sourceHash: 'hash',
+      symbol: 'OllamaAdapter.isAvailable', kind: 'class-method', exported: true,
+      defaultExport: false, async: true, parameters: [], returnType: 'Promise<boolean>',
+      classMethod: {
+        className: 'OllamaAdapter', methodName: 'isAvailable', static: false,
+        constructorParameters: [{ name: 'modelName', type: 'unknown', optional: true }],
+      },
+      startLine: 1, endLine: 8,
+      rawCode: `async isAvailable(): Promise<boolean> {
+        try {
+          execSync('ollama --version', { stdio: 'ignore' });
+          return true;
+        } catch {
+          return false;
+        }
+      }`,
+      dependencies: [{
+        module: 'child_process', importedNames: ['execSync'], external: true,
+        boundary: 'process', strategy: 'mock', mockKind: 'module', usedMembers: ['execSync'],
+      }],
+      supportingContext: {
+        callGraph: [], helperDefinitions: [], typeDefinitions: [], constantDefinitions: [],
+        reachableImports: [], unresolvedSymbols: [], truncated: false,
+      },
+      branches: [
+        { id: 'B001_TRY', kind: 'catch', condition: 'try', outcome: 'true', line: 2 },
+        { id: 'B001_CATCH', kind: 'catch', condition: 'catch', outcome: 'false', line: 5 },
+      ],
+      executionMode: 'NATIVE_WITH_MOCKS', profile: 'PROCESS_SANDBOX', runtimeEnvironment: 'node',
+      profileReasons: ['process boundary'], unsupportedReasons: [],
+    };
+    const success: UnitPlannedTestCase = {
+      id: 'UT_OLLAMA_AVAILABLE_001', name: 'returns true when command succeeds',
+      branchIds: ['B001_TRY'], inputs: {}, constructorInputs: {},
+      expected: { kind: 'resolve', value: true }, oracleSource: 'implementation',
+      oracleEvidence: { status: 'proposed', source: 'ai-inference' },
+      mocks: [{ module: 'child_process', symbol: 'execSync', behavior: { kind: 'return', value: '' } }],
+    };
+    const failure: UnitPlannedTestCase = {
+      ...success, id: 'UT_OLLAMA_AVAILABLE_002', name: 'returns false when command fails',
+      branchIds: ['B001_CATCH'], expected: { kind: 'resolve', value: false },
+      mocks: [{ module: 'child_process', symbol: 'execSync', behavior: { kind: 'throw', message: 'missing ollama' } }],
+    };
+    expect(resolveUnitTestOracle({}, analysisTarget, success)).toMatchObject({
+      status: 'VERIFIED', evidence: { source: 'mock-trace' },
+    });
+    expect(resolveUnitTestOracle({}, analysisTarget, failure)).toMatchObject({
+      status: 'VERIFIED', evidence: { source: 'mock-trace' },
+    });
   });
 
   it('verifies a literal thrown error and compiler asserts class plus message from one call', () => {
@@ -135,5 +189,35 @@ describe('Unit Oracle Resolver', () => {
     const result = resolveUnitTestOracle({}, helperTarget, planned(5));
     expect(result.status).toBe('VERIFIED');
     expect(result.evidence?.source).toBe('pure-evaluation');
+  });
+
+  it('traces resolved and rejected async global mocks without calling a real API', () => {
+    const fetchTarget = target(`export async function sum(left: number, right: number) {
+      try {
+        const response = await fetch('/sum');
+        return response.value;
+      } catch {
+        return -1;
+      }
+    }`);
+    fetchTarget.async = true;
+    fetchTarget.returnType = 'Promise<number>';
+    fetchTarget.dependencies = [{
+      module: 'globalThis.fetch', importedNames: ['fetch'], external: true, boundary: 'network',
+      strategy: 'mock', mockKind: 'global', globalName: 'fetch', usedMembers: ['fetch'],
+    }];
+    const success = planned(5);
+    success.expected = { kind: 'resolve', value: 5 };
+    success.mocks = [{
+      module: 'globalThis.fetch', symbol: 'fetch',
+      behavior: { kind: 'resolve', properties: { value: 5 } },
+    }];
+    const failure = planned(-1);
+    failure.expected = { kind: 'resolve', value: -1 };
+    failure.mocks = [{
+      module: 'globalThis.fetch', symbol: 'fetch', behavior: { kind: 'reject', message: 'offline' },
+    }];
+    expect(resolveUnitTestOracle({}, fetchTarget, success)).toMatchObject({ status: 'VERIFIED' });
+    expect(resolveUnitTestOracle({}, fetchTarget, failure)).toMatchObject({ status: 'VERIFIED' });
   });
 });

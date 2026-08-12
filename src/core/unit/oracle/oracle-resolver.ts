@@ -63,7 +63,7 @@ function verifyRequirement(
 }
 
 function verifyImplementation(target: UnitTarget, testCase: UnitPlannedTestCase): UnitOracleResolution {
-  const evaluated = evaluateTargetStatically(target, testCase.inputs);
+  const evaluated = evaluateTargetStatically(target, testCase.inputs, testCase.mocks);
   if (!evaluated.supported) {
     return {
       testCaseId: testCase.id,
@@ -103,7 +103,7 @@ function verifyImplementation(target: UnitTarget, testCase: UnitPlannedTestCase)
     testCaseId: testCase.id,
     status: 'VERIFIED',
     evidence: {
-      status: 'verified', source: 'pure-evaluation', sourceFile: target.sourceFile,
+      status: 'verified', source: testCase.mocks.length > 0 ? 'mock-trace' : 'pure-evaluation', sourceFile: target.sourceFile,
       line: target.startLine, expression: evaluated.expression,
     },
     errors: [],
@@ -126,7 +126,7 @@ export function resolveUnitTestOracle(
   const requirement = verifyRequirement(testCase, context.requirements);
   if (requirement) return requirement;
   if (testCase.oracleSource === 'implementation'
-    || ['return-literal', 'throw-literal', 'pure-evaluation', 'ai-inference'].includes(testCase.oracleEvidence?.source || '')) {
+    || ['return-literal', 'throw-literal', 'pure-evaluation', 'mock-trace', 'ai-inference'].includes(testCase.oracleEvidence?.source || '')) {
     return verifyImplementation(target, testCase);
   }
   if (testCase.oracleEvidence?.source === 'sandbox-observation') {

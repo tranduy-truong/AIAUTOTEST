@@ -7,6 +7,7 @@ import { loadStructuredE2EPlan } from "../planner/run.js";
 import { plannerPlanToTestCases } from "../planner/schema.js";
 import { buildActionPlan } from "../../core/action-plan.js";
 import { loadUnitSession } from '../../core/unit/artifacts.js';
+import { artifact, detail, section, warning } from '../../core/cli-ui.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -75,6 +76,14 @@ export function classifyUnitFailure(errorLog: string): HealerDiagnosis {
     return {
       category: 'TEST_SCRIPT_BUG',
       reasonCode: 'TEST_DISCOVERY_CONFIGURATION_ERROR',
+      confidence: 'high', canSelfHeal: false, preservesExpectedResult: true,
+      recoveryAction: 'REPORT_ONLY', failedLine,
+    };
+  }
+  if (/err_invalid_arg_type|argument must be of type .* received undefined|path.*received undefined/.test(normalized)) {
+    return {
+      category: 'TEST_SCRIPT_BUG',
+      reasonCode: 'GENERATED_INPUT_FIXTURE_INVALID',
       confidence: 'high', canSelfHeal: false, preservesExpectedResult: true,
       recoveryAction: 'REPORT_ONLY', failedLine,
     };
@@ -257,9 +266,7 @@ export async function runHealer(
   level: "unit" | "integration" | "e2e",
   errorLog: string,
 ) {
-  console.log(
-    `\n🩺 [Healer Agent] Đang chẩn đoán lỗi cho tầng: ${level.toUpperCase()}`,
-  );
+  section('03', 'Healer', 'Phân loại nguyên nhân; không tự đổi expected result');
 
   const promptFileName = `prompt-${level}.md`;
   const promptFilePath = path.join(__dirname, promptFileName);
@@ -295,12 +302,18 @@ export async function runHealer(
       // Global artifact above remains available when there is no Unit session.
     }
   }
-  console.log(`   Phân loại: ${diagnosis.category} (${diagnosis.reasonCode})`);
-  console.log(
-    diagnosis.canSelfHeal
-      ? '   Healer có thể sửa test nhưng phải giữ nguyên Expected Result từ Planner.'
-      : '   Healer không tự đổi Expected Result; cần thêm bằng chứng hoặc xác nhận product bug.',
-  );
+  const diagnosisLabels: Record<string, string> = {
+    GENERATED_INPUT_FIXTURE_INVALID: 'Dữ liệu đầu vào do Generator tạo chưa đúng kiểu',
+    IMPLEMENTATION_DIFFERS_FROM_PLANNED_ORACLE: 'Kết quả thực tế khác expected đã lập',
+    IMPORT_OR_ALIAS_NOT_RESOLVED: 'Import hoặc alias của dự án chưa được resolve',
+    UNIT_TEST_RUNNER_LAUNCH_FAILED: 'Không khởi chạy được test runner',
+    UNIT_ASYNC_DID_NOT_SETTLE: 'Tác vụ bất đồng bộ không hoàn tất đúng hạn',
+    UNIT_NEEDS_MORE_EVIDENCE: 'Chưa đủ dữ liệu để kết luận nguyên nhân',
+  };
+  warning(diagnosisLabels[diagnosis.reasonCode] || diagnosis.category);
+  detail('Mã chẩn đoán', diagnosis.reasonCode);
+  detail('Chính sách', diagnosis.canSelfHeal ? 'Có thể sửa test nhưng giữ nguyên expected.' : 'Chỉ chẩn đoán, không tự đổi expected.');
+  artifact('Chi tiết kỹ thuật', 'healer-diagnosis.json');
 
   let recovery: { ok: boolean; reason: string } | undefined;
   if (level === 'e2e' && diagnosis.canSelfHeal) {

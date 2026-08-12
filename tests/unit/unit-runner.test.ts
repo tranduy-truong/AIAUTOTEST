@@ -6,6 +6,7 @@ import {
   buildUnitRunnerArgs,
   resolveUnitRunnerInvocation,
   resolveVitestProjectConfig,
+  summarizeUnitRunOutput,
 } from '../../src/core/unit/runner.js';
 
 const temporaryDirectories: string[] = [];
@@ -34,6 +35,23 @@ function createWindowsRunner(framework: 'vitest' | 'jest'): {
 }
 
 describe('Unit runner invocation', () => {
+  it('summarizes noisy Vitest failures for the CLI while retaining useful cause and names', () => {
+    const output = `
+ ❯ tests/unit/adapter.test.ts (2 tests | 1 failed)
+     × UT_ADAPTER_001 - invalid fixture 10ms
+     ✓ UT_ADAPTER_002 - success 1ms
+ Test Files  1 failed | 1 passed (2)
+      Tests  1 failed | 2 passed (3)
+Caused by: TypeError: The "path" argument must be of type string. Received undefined
+`;
+    expect(summarizeUnitRunOutput(output)).toEqual({
+      totalFiles: 2, passedFiles: 1, failedFiles: 1,
+      totalTests: 3, passedTests: 2, failedTests: 1,
+      failedNames: ['UT_ADAPTER_001 - invalid fixture'],
+      primaryError: 'TypeError: The "path" argument must be of type string. Received undefined',
+    });
+  });
+
   it.each(['vitest', 'jest'] as const)(
     'runs the real %s JavaScript CLI through Node on Windows',
     framework => {

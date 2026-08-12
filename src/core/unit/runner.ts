@@ -17,9 +17,59 @@ export interface UnitRunResult {
   coverageGapReportPath?: string;
 }
 
+export interface UnitRunSummary {
+  totalFiles: number;
+  passedFiles: number;
+  failedFiles: number;
+  totalTests: number;
+  passedTests: number;
+  failedTests: number;
+  failedNames: string[];
+  primaryError?: string;
+}
+
 interface RunnerInvocation {
   executable: string;
   argsPrefix: string[];
+}
+
+function stripTerminalFormatting(value: string): string {
+  return value.replace(/\u001b\[[0-9;]*m/g, '').replace(/\r/g, '');
+}
+
+function countsFromSummaryLine(
+  output: string,
+  label: 'Test Files' | 'Tests',
+): { total: number; passed: number; failed: number } {
+  const line = output.split('\n').find(item => item.trimStart().startsWith(label));
+  if (!line) return { total: 0, passed: 0, failed: 0 };
+  const passed = Number(line.match(/(\d+)\s+passed/)?.[1] || 0);
+  const failed = Number(line.match(/(\d+)\s+failed/)?.[1] || 0);
+  const total = Number(line.match(/\((\d+)\)/)?.[1] || passed + failed);
+  return { total, passed, failed };
+}
+
+/** Keeps the complete runner log in test-results.json while giving the CLI a
+ * stable, short result suitable for non-technical testers. */
+export function summarizeUnitRunOutput(stdout: string, stderr = ''): UnitRunSummary {
+  const output = stripTerminalFormatting(`${stdout}\n${stderr}`);
+  const files = countsFromSummaryLine(output, 'Test Files');
+  const tests = countsFromSummaryLine(output, 'Tests');
+  const failedNames = [...output.matchAll(/^\s*[×✗]\s+(.+?)(?:\s+\d+(?:\.\d+)?ms)?\s*$/gm)]
+    .map(match => match[1].trim())
+    .filter((name, index, all) => all.indexOf(name) === index);
+  const primaryError = output.match(/^Caused by:\s*(.+)$/m)?.[1]?.trim()
+    || output.match(/^(?:AssertionError|TypeError|Error):\s*(.+)$/m)?.[0]?.trim();
+  return {
+    totalFiles: files.total,
+    passedFiles: files.passed,
+    failedFiles: files.failed,
+    totalTests: tests.total,
+    passedTests: tests.passed,
+    failedTests: tests.failed,
+    failedNames,
+    primaryError,
+  };
 }
 
 function packageJson(root: string): Record<string, unknown> {

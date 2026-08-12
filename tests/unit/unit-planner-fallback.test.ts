@@ -9,6 +9,7 @@ import {
 } from '../../src/agents/generator/unit-generator.js';
 import { compileUnitTestFile } from '../../src/core/unit/compiler/test-file-compiler.js';
 import { resolveUnitPlannerProposal } from '../../src/core/unit/planner-fallback.js';
+import { buildDeterministicUnitTarget } from '../../src/core/unit/deterministic-plan-builder.js';
 import { resolveUnitTestOracle } from '../../src/core/unit/oracle/oracle-resolver.js';
 import { validateStructuredUnitPlan } from '../../src/core/unit/plan-validator.js';
 import type { UnitContextBundle, UnitTarget } from '../../src/core/unit/schema.js';
@@ -22,6 +23,28 @@ function ollamaRunContext(): UnitContextBundle {
 }
 
 describe('Unit Planner deterministic fallback', () => {
+  it('infers required object properties used by pasted snippets instead of emitting an empty object', () => {
+    const target: UnitTarget = {
+      id: 'snippet.ts#Adapter.run', sourceFile: 'snippet.ts', sourceHash: 'fixture-hash',
+      symbol: 'Adapter.run', kind: 'class-method', exported: true, defaultExport: false, async: true,
+      parameters: [{ name: 'opts', type: 'MissingImportedOptions', optional: false }],
+      returnType: 'Promise<unknown>', startLine: 1, endLine: 3,
+      rawCode: 'async run(opts: MissingImportedOptions) { return path.join(opts.promptDir, "task.md"); }',
+      classMethod: { className: 'Adapter', methodName: 'run', static: false, constructorParameters: [] },
+      dependencies: [],
+      supportingContext: {
+        callGraph: [], helperDefinitions: [], typeDefinitions: [], constantDefinitions: [],
+        reachableImports: [], unresolvedSymbols: ['MissingImportedOptions'], truncated: false,
+      },
+      branches: [],
+      executionMode: 'NATIVE_DIRECT', profile: 'UNIT_NATIVE', runtimeEnvironment: 'node',
+      profileReasons: [], unsupportedReasons: [],
+    };
+
+    const planned = buildDeterministicUnitTarget(target);
+    expect(planned.testCases[0].inputs).toEqual({ opts: { promptDir: 'fixture' } });
+  });
+
   it('solves direct parameter conditions for true and false branch inputs', () => {
     const fixtureTarget: UnitTarget = {
       id: 'src/discount.ts#discount', sourceFile: 'src/discount.ts', sourceHash: 'fixture-hash',

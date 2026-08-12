@@ -84,4 +84,17 @@ describe('Unit Healer diagnose-only policy', () => {
       canSelfHeal: false,
     });
   });
+
+  it('recognizes a generated object fixture missing a required path property', () => {
+    const diagnosis = classifyUnitFailure([
+      'AssertionError: promise rejected instead of resolving',
+      'TypeError: The "path" argument must be of type string. Received undefined',
+      "Serialized Error: { code: 'ERR_INVALID_ARG_TYPE' }",
+    ].join('\n'));
+    expect(diagnosis).toMatchObject({
+      category: 'TEST_SCRIPT_BUG',
+      reasonCode: 'GENERATED_INPUT_FIXTURE_INVALID',
+      confidence: 'high',
+    });
+  });
 });

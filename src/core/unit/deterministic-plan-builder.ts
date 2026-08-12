@@ -69,10 +69,51 @@ function fixtureForType(type: string, definitions: Map<string, string>, depth = 
   return object ?? {};
 }
 
+function inferredPropertyValue(property: string, usage: string): UnitDataValue {
+  if (
+    /\bpath\.(?:join|resolve|dirname|basename|extname|normalize)\s*\([^)]*$/s.test(usage)
+    || /\bfs\.(?:readFileSync|writeFileSync|existsSync|mkdirSync|statSync)\s*\([^)]*$/s.test(usage)
+    || /(?:path|dir|file|folder|url|uri|name|prompt|work|root|cwd)$/i.test(property)
+  ) return 'fixture';
+  if (/(?:timeout|duration|delay|count|limit|max|min|size|port|turns?|ms)$/i.test(property)) return 1;
+  if (/^(?:is|has|can|should|enable|disable)|(?:enabled|disabled|active|valid)$/i.test(property)) return true;
+  if (/(?:items|tools|files|paths|values|entries|args)$/i.test(property)) return [];
+  return 'fixture';
+}
+
+/**
+ * Pasted snippets often keep a type-only import whose sibling file was not
+ * pasted. In that case the type graph cannot describe the parameter object.
+ * Derive only properties that the target actually reads, and choose a safe
+ * primitive from the API usage/name. This avoids silently compiling `run({})`
+ * when runtime code immediately calls path.join(opts.promptDir, ...).
+ */
+function enrichFixtureFromParameterUsage(
+  parameter: UnitParameter,
+  fixture: UnitDataValue,
+  rawCode: string,
+): UnitDataValue {
+  if (!/^[A-Za-z_$][\w$]*$/.test(parameter.name)) return fixture;
+  if (!fixture || typeof fixture !== 'object' || Array.isArray(fixture) || '$type' in fixture) return fixture;
+  const output = { ...(fixture as Record<string, UnitDataValue>) };
+  const escaped = parameter.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const memberPattern = new RegExp(`\\b${escaped}\\s*(?:\\?\\.|\\.)\\s*([A-Za-z_$][\\w$]*)`, 'g');
+  for (const match of rawCode.matchAll(memberPattern)) {
+    const property = match[1];
+    if (property in output) continue;
+    const usagePrefix = rawCode.slice(Math.max(0, match.index! - 100), match.index! + match[0].length);
+    output[property] = inferredPropertyValue(property, usagePrefix);
+  }
+  return output;
+}
+
 function parameterFixtures(parameters: UnitParameter[], target: UnitTarget): Record<string, UnitDataValue> {
   const definitions = typeDefinitions(target);
   return Object.fromEntries(parameters.filter(parameter => !parameter.optional)
-    .map(parameter => [parameter.name, fixtureForType(parameter.type, definitions)]));
+    .map(parameter => {
+      const fixture = fixtureForType(parameter.type, definitions);
+      return [parameter.name, enrichFixtureFromParameterUsage(parameter, fixture, target.rawCode)];
+    }));
 }
 
 function operationIsAwaited(target: UnitTarget, operation: string): boolean {

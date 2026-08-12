@@ -11,7 +11,7 @@ import { plannerPlanToTestCases } from "./agents/planner/schema.js";
 import { buildActionPlan } from "./core/action-plan.js";
 import { buildCompactDomReport, runLive } from "./agents/crawler/live-runner.js";
 import { analyzeUnitInput, createUnitSession } from "./core/unit/artifacts.js";
-import { runLastGeneratedUnitTests } from "./core/unit/runner.js";
+import { runLastGeneratedUnitTests, summarizeUnitRunOutput } from "./core/unit/runner.js";
 import { runUnitCoverageGuidedLoop } from "./agents/planner/unit-coverage-loop.js";
 import {
   artifact,
@@ -404,9 +404,13 @@ async function runTests(level) {
       return;
     }
     detail("Dự án", path.basename(unitResult.cwd));
-    detail("Lệnh", unitResult.command.join(" ") || "không có");
-    if (unitResult.stdout) console.log(unitResult.stdout);
-    if (unitResult.stderr) console.error(unitResult.stderr);
+    const runSummary = summarizeUnitRunOutput(unitResult.stdout, unitResult.stderr);
+    summary("Kết quả thực thi", [
+      ["File test", `${runSummary.passedFiles}/${runSummary.totalFiles} pass`],
+      ["Test case", `${runSummary.passedTests}/${runSummary.totalTests} pass`],
+      ["Thất bại", String(runSummary.failedTests)],
+      ["Coverage", unitResult.coverageEnabled ? "Đã bật" : "Chưa bật"],
+    ], unitResult.ok ? "success" : "error");
     if (unitResult.ok) {
       success("Tất cả Unit Test đã pass.");
       unitResult.coverageEnabled
@@ -422,11 +426,20 @@ async function runTests(level) {
     } else {
       const errorMessage = `${unitResult.stdout}\n${unitResult.stderr}`.trim();
       uiError("Unit Test chưa pass.");
-      detail("Healer", "Chỉ chẩn đoán; không tự đổi expected result.");
+      for (const failedName of runSummary.failedNames.slice(0, 3)) {
+        detail("Test lỗi", failedName);
+      }
+      if (runSummary.failedNames.length > 3) {
+        detail("Còn lại", `${runSummary.failedNames.length - 3} test case`);
+      }
+      if (runSummary.primaryError) detail("Nguyên nhân", runSummary.primaryError);
+      artifact("Log đầy đủ", "test-results.json");
       await runHealer("unit", errorMessage);
       const result = await harness.handleTestFailure("unit", "Generated Unit Suite", errorMessage);
       fs.mkdirSync("artifacts", { recursive: true });
       fs.writeFileSync("artifacts/report.md", result.report);
+      success("Đã lưu báo cáo chẩn đoán.");
+      artifact("Báo cáo", "artifacts/report.md");
     }
     await returnToMenu();
     return;

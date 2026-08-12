@@ -52,6 +52,36 @@ function validateDataValue(value: unknown, label: string): string[] {
   return Object.entries(value).flatMap(([key, item]) => validateDataValue(item, `${label}.${key}`));
 }
 
+function validateMockOutcome(value: unknown, label: string, allowSequence = false): string[] {
+  if (!isObject(value)) return [`${label} phải là object có cấu trúc.`];
+  if (!['return', 'resolve', 'reject', 'throw'].includes(String(value.kind))) {
+    return [`${label}.kind phải là return | resolve | reject | throw.`];
+  }
+  const errors: string[] = [];
+  if (['reject', 'throw'].includes(String(value.kind)) && !('value' in value) && !('message' in value)) {
+    errors.push(`${label} cần value hoặc message có bằng chứng cho kind=${String(value.kind)}.`);
+  }
+  if ('value' in value) errors.push(...validateDataValue(value.value, `${label}.value`));
+  if ('message' in value && typeof value.message !== 'string') errors.push(`${label}.message phải là string.`);
+  if ('properties' in value) {
+    if (!isObject(value.properties)) errors.push(`${label}.properties phải là object.`);
+    else for (const [key, item] of Object.entries(value.properties)) {
+      errors.push(...validateDataValue(item, `${label}.properties.${key}`));
+    }
+  }
+  if ('methods' in value) {
+    if (!isObject(value.methods)) errors.push(`${label}.methods phải là object.`);
+    else for (const [key, item] of Object.entries(value.methods)) {
+      errors.push(...validateMockOutcome(item, `${label}.methods.${key}`));
+    }
+  }
+  if (allowSequence && 'sequence' in value) {
+    if (!Array.isArray(value.sequence)) errors.push(`${label}.sequence phải là mảng.`);
+    else value.sequence.forEach((item, index) => errors.push(...validateMockOutcome(item, `${label}.sequence[${index}]`)));
+  }
+  return errors;
+}
+
 export function parseStructuredUnitPlan(raw: string): StructuredUnitPlan | null {
   const cleaned = raw
     .replace(/^```(?:json)?\s*/i, '')
@@ -135,9 +165,8 @@ function validateTarget(planTarget: UnitPlanTarget, target: UnitTarget): UnitPla
 
   const validBranches = new Set(target.branches.map(branch => branch.id));
   const validDependencies = new Set(target.dependencies.map(dependency => dependency.module));
-  const requiredMocks = new Set(
-    target.dependencies.filter(dependency => dependency.strategy === 'mock').map(dependency => dependency.module),
-  );
+  const mockDependencies = target.dependencies.filter(dependency => dependency.strategy === 'mock');
+  const requiredMocks = new Set(mockDependencies.map(dependency => dependency.module));
   const coveredBranches = new Set<string>();
   const ids = new Set<string>();
   for (const testCase of planTarget.testCases) {
@@ -290,8 +319,23 @@ function validateTarget(planTarget: UnitPlanTarget, target: UnitTarget): UnitPla
           message: `Dependency ${mock.module} không có strategy=mock.`,
         });
       }
-      if (typeof mock.behavior !== 'string' || !mock.behavior.trim()) {
-        issues.push({ code: 'INVALID_MOCK_PLAN', target: targetLabel, testCaseId: testCase.id, message: 'Mock thiếu behavior rõ ràng.' });
+      const dependency = mockDependencies.find(item => item.module === mock.module);
+      const operations = dependency?.usedMembers || (dependency?.mockKind === 'global'
+        ? [dependency.globalName || dependency.module]
+        : dependency?.importedNames || []);
+      if (operations.length > 1 && (!mock.symbol || !operations.includes(mock.symbol))) {
+        issues.push({
+          code: 'INVALID_MOCK_SYMBOL', target: targetLabel, testCaseId: testCase.id,
+          message: `Mock ${mock.module} phải chỉ rõ symbol: ${operations.join(', ')}.`,
+        });
+      } else if (mock.symbol && operations.length > 0 && !operations.includes(mock.symbol)) {
+        issues.push({
+          code: 'INVENTED_MOCK_SYMBOL', target: targetLabel, testCaseId: testCase.id,
+          message: `Mock symbol không được Code Reader xác minh: ${mock.module}#${mock.symbol}.`,
+        });
+      }
+      for (const message of validateMockOutcome(mock.behavior, `mocks.${mock.module}.behavior`, true)) {
+        issues.push({ code: 'INVALID_MOCK_PLAN', target: targetLabel, testCaseId: testCase.id, message });
       }
     }
     const plannedMocks = new Set((testCase.mocks || []).map(mock => mock.module));
@@ -301,6 +345,21 @@ function validateTarget(planTarget: UnitPlanTarget, target: UnitTarget): UnitPla
           code: 'MISSING_REQUIRED_MOCK', target: targetLabel, testCaseId: testCase.id,
           message: `Test chưa cô lập dependency strategy=mock: ${dependency}.`,
         });
+      }
+    }
+    for (const dependency of mockDependencies) {
+      const operations = dependency.usedMembers || [];
+      if (operations.length <= 1) continue;
+      const plannedOperations = new Set((testCase.mocks || [])
+        .filter(mock => mock.module === dependency.module)
+        .map(mock => mock.symbol));
+      for (const operation of operations) {
+        if (!plannedOperations.has(operation)) {
+          issues.push({
+            code: 'MISSING_REQUIRED_MOCK_OPERATION', target: targetLabel, testCaseId: testCase.id,
+            message: `Test chưa cấu hình ${dependency.module}#${operation}.`,
+          });
+        }
       }
     }
   }
@@ -348,5 +407,38 @@ export function unitPlanForSingleTarget(
   return {
     ...plan,
     targets: plan.targets.filter(item => item.sourceFile === target.sourceFile && item.symbol === target.symbol),
+  };
+}
+
+export function salvageStructuredUnitPlan(
+  plan: StructuredUnitPlan,
+  context: UnitContextBundle,
+): {
+  plan: StructuredUnitPlan | null;
+  skippedIssues: UnitPlanValidationIssue[];
+  blockingIssues: UnitPlanValidationIssue[];
+} {
+  const initial = validateStructuredUnitPlan(plan, context);
+  if (initial.length === 0) return { plan, skippedIssues: [], blockingIssues: [] };
+  const invalidCaseIds = new Set(initial.flatMap(issue => issue.testCaseId ? [issue.testCaseId] : []));
+  const targets = plan.targets.map(target => ({
+    ...target,
+    testCases: target.testCases.filter(testCase => !invalidCaseIds.has(testCase.id)),
+  }));
+  if (targets.some(target => target.testCases.length === 0)) {
+    return { plan: null, skippedIssues: initial, blockingIssues: initial };
+  }
+  const candidate = { ...plan, targets };
+  const after = validateStructuredUnitPlan(candidate, context);
+  const toleratedCodes = new Set(['UNCOVERED_BRANCH']);
+  const blockingIssues = after.filter(issue => !toleratedCodes.has(issue.code));
+  if (blockingIssues.length > 0) return { plan: null, skippedIssues: initial, blockingIssues };
+  return {
+    plan: candidate,
+    skippedIssues: [
+      ...initial.filter(issue => issue.testCaseId && invalidCaseIds.has(issue.testCaseId)),
+      ...after.filter(issue => toleratedCodes.has(issue.code)),
+    ],
+    blockingIssues: [],
   };
 }

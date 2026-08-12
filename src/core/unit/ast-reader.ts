@@ -130,6 +130,21 @@ function dependenciesForTarget(
       resolvedFile: item.resolvedFile,
     });
   }
+  // Supporting-context resolution stores source export names, while member
+  // access detection needs the local binding used in the target (for example
+  // default import `fs` in `fs.readFileSync`). Merge both views here.
+  for (const item of rootImports) {
+    const key = item.resolvedFile || item.module;
+    const existing = aggregated.get(key);
+    if (!existing) continue;
+    aggregated.set(key, {
+      ...existing,
+      importedNames: [...new Set([
+        ...existing.importedNames.filter(name => name !== 'default' && name !== '*'),
+        ...item.importedNames,
+      ])],
+    });
+  }
   // Side-effect imports in the target module execute as soon as the real target
   // is imported, even though they have no local binding in the call graph.
   for (const item of rootImports.filter(candidate => candidate.importedNames.length === 0)) {
@@ -143,13 +158,20 @@ function dependenciesForTarget(
         ...item,
         strategy: needsNativeEnvironment ? 'native-environment' : needsMock ? 'mock' : 'real',
         mockKind: needsMock ? 'module' : undefined,
+        usedMembers: [...new Set(item.importedNames.flatMap(localName => {
+          const escaped = localName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          const members = [...evidenceCode.matchAll(new RegExp(`\\b${escaped}\\s*\\.\\s*([A-Za-z_$][\\w$]*)`, 'g'))]
+            .map(match => match[1]);
+          if (members.length > 0) return members;
+          return new RegExp(`\\b${escaped}\\b`).test(evidenceCode) ? [localName] : [];
+        }))],
       };
     });
   const addGlobal = (module: string, globalName: string, boundary: UnitDependency['boundary']) => {
     if (dependencies.some(dependency => dependency.module === module)) return;
     dependencies.push({
       module, importedNames: [globalName], external: true, boundary,
-      strategy: 'mock', mockKind: 'global', globalName,
+      strategy: 'mock', mockKind: 'global', globalName, usedMembers: [globalName],
     });
   };
   if (/\bfetch\s*\(/.test(evidenceCode)) addGlobal('globalThis.fetch', 'fetch', 'network');

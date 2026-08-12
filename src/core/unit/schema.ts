@@ -48,6 +48,8 @@ export interface UnitDependency {
   mockKind?: 'module' | 'global';
   globalName?: string;
   resolvedFile?: string;
+  /** Member/function names actually referenced by the selected target. */
+  usedMembers?: string[];
 }
 
 export interface UnitBranch {
@@ -150,6 +152,7 @@ export interface UnitTestabilityManifest {
 
 export type UnitGenerationStatus =
   | 'GENERATED'
+  | 'PARTIAL'
   | 'NO_RUNTIME'
   | 'REFACTOR_REQUIRED'
   | 'PROFILE_NOT_SUPPORTED'
@@ -158,12 +161,25 @@ export type UnitGenerationStatus =
   | 'STATIC_VALIDATION_FAILED'
   | 'TYPECHECK_FAILED';
 
+export type UnitTestCaseGenerationStatus =
+  | 'GENERATED'
+  | 'NEEDS_ORACLE'
+  | 'INVALID_FIXTURE'
+  | 'INVALID_MOCK';
+
+export interface UnitTestCaseGenerationResult {
+  testCaseId: string;
+  status: UnitTestCaseGenerationStatus;
+  errors: string[];
+}
+
 export interface UnitGenerationTargetResult {
   target: string;
   profile: UnitTestabilityProfile;
   status: UnitGenerationStatus;
   file?: string;
   errors: string[];
+  testCases?: UnitTestCaseGenerationResult[];
 }
 
 export interface UnitCodeIndex {
@@ -218,10 +234,25 @@ export interface UnitExpectedResult {
   }>;
 }
 
+export type UnitMockOutcomeKind = 'return' | 'resolve' | 'reject' | 'throw';
+
+export interface UnitMockOutcome {
+  kind: UnitMockOutcomeKind;
+  value?: UnitDataValue;
+  message?: string;
+  properties?: Record<string, UnitDataValue>;
+  methods?: Record<string, UnitMockOutcome>;
+}
+
+export interface UnitMockBehavior extends UnitMockOutcome {
+  /** Consecutive calls consume these outcomes in order. */
+  sequence?: UnitMockOutcome[];
+}
+
 export interface UnitMockPlan {
   module: string;
   symbol?: string;
-  behavior: string;
+  behavior: UnitMockBehavior;
 }
 
 export interface UnitPlannedTestCase {

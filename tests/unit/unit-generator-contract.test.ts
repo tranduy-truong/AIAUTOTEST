@@ -91,7 +91,7 @@ it.skip('UT_DISCOUNT_001', () => expect(applyDiscount()).toBe(90));`;
       executionMode: 'NATIVE_WITH_MOCKS',
       testCases: planTarget.testCases.map(testCase => ({
         ...testCase,
-        mocks: [{ module: 'openai', symbol: 'OpenAI', behavior: 'returns output' }],
+        mocks: [{ module: 'openai', symbol: 'OpenAI', behavior: { kind: 'return', value: 'output' } }],
       })),
     };
     const code = `
@@ -129,7 +129,7 @@ describe('applyDiscount', () => {
       executionMode: 'NATIVE_WITH_MOCKS',
       testCases: planTarget.testCases.map(testCase => ({
         ...testCase,
-        mocks: [{ module: 'openai', symbol: 'OpenAI', behavior: 'returns fixed client' }],
+        mocks: [{ module: 'openai', symbol: 'OpenAI', behavior: { kind: 'return', value: { ok: true } } }],
       })),
     };
     const code = `
@@ -203,7 +203,7 @@ describe('Adapter.run', () => {
       executionMode: 'NATIVE_WITH_MOCKS',
       testCases: planTarget.testCases.map(testCase => ({
         ...testCase,
-        mocks: [{ module: 'globalThis.fetch', symbol: 'fetch', behavior: 'returns fixed response' }],
+        mocks: [{ module: 'globalThis.fetch', symbol: 'fetch', behavior: { kind: 'resolve', value: { ok: true } } }],
       })),
     };
     const withoutStub = `
@@ -242,5 +242,22 @@ it('UT_DISCOUNT_001 - returns discount', () => expect(applyDiscount()).toBe(90))
       PROFILE_NOT_SUPPORTED: 1,
     });
     expect(manifest.generatedFiles).toEqual(['/tmp/a.test.ts']);
+  });
+
+  it('counts a partially generated target as runnable while preserving case failures', () => {
+    const manifest = buildGenerationManifest([{
+      target: 'src/service.ts#Service.run',
+      profile: 'UNIT_MOCKED',
+      status: 'PARTIAL',
+      file: '/tmp/service.test.ts',
+      errors: ['UT_SERVICE_002 needs oracle'],
+      testCases: [
+        { testCaseId: 'UT_SERVICE_001', status: 'GENERATED', errors: [] },
+        { testCaseId: 'UT_SERVICE_002', status: 'NEEDS_ORACLE', errors: ['missing expected value'] },
+      ],
+    }]);
+
+    expect(manifest.summary).toEqual(expect.objectContaining({ generated: 1, notGenerated: 0 }));
+    expect(manifest.targets[0].testCases?.[1].status).toBe('NEEDS_ORACLE');
   });
 });

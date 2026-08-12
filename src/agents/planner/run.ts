@@ -17,6 +17,7 @@ import { renderUnitPlanMarkdown } from '../../core/unit/markdown-renderer.js';
 import {
   anchorStructuredUnitPlan,
   parseStructuredUnitPlan,
+  salvageStructuredUnitPlan,
   validateStructuredUnitPlan,
   type UnitPlanValidationIssue,
 } from '../../core/unit/plan-validator.js';
@@ -347,7 +348,12 @@ async function planOneUnitTarget(
   systemPrompt: string,
   context: UnitContextBundle,
   index: number,
-): Promise<{ plan: StructuredUnitPlan | null; issues: UnitPlanValidationIssue[]; rawOutput: string }> {
+): Promise<{
+  plan: StructuredUnitPlan | null;
+  issues: UnitPlanValidationIssue[];
+  skippedIssues: UnitPlanValidationIssue[];
+  rawOutput: string;
+}> {
   const aiContext = unitContextForAI(context);
   const task = createUnitTask(systemPrompt, aiContext);
   let result = await callPlannerAdapter(task, `_unit_${index}`);
@@ -355,6 +361,7 @@ async function planOneUnitTarget(
     return {
       plan: null,
       issues: [{ code: 'AI_API_ERROR', message: result.rawOutput }],
+      skippedIssues: [],
       rawOutput: result.rawOutput,
     };
   }
@@ -387,7 +394,16 @@ async function planOneUnitTarget(
       break;
     }
   }
-  return { plan, issues, rawOutput: result.rawOutput };
+  let skippedIssues: UnitPlanValidationIssue[] = [];
+  if (plan && issues.length > 0) {
+    const salvaged = salvageStructuredUnitPlan(plan, aiContext);
+    if (salvaged.plan) {
+      plan = salvaged.plan;
+      issues = [];
+      skippedIssues = salvaged.skippedIssues;
+    } else issues = salvaged.blockingIssues;
+  }
+  return { plan, issues, skippedIssues, rawOutput: result.rawOutput };
 }
 
 async function runStructuredUnitPlanner(
@@ -410,17 +426,27 @@ async function runStructuredUnitPlanner(
   const clarifications: string[] = [];
   const allIssues: UnitPlanValidationIssue[] = [];
   const rawOutputs: string[] = [];
+  const skippedTestCaseIssues: UnitPlanValidationIssue[] = [];
   for (let index = 0; index < context.targets.length; index++) {
     const singleContext: UnitContextBundle = { ...context, targets: [context.targets[index]] };
     console.log(`   Phân tích ${index + 1}/${context.targets.length}: ${context.targets[index].sourceFile}#${context.targets[index].symbol}`);
     const result = await planOneUnitTarget(systemPrompt, singleContext, index + 1);
     rawOutputs.push(result.rawOutput);
+    skippedTestCaseIssues.push(...result.skippedIssues);
     if (!result.plan || result.issues.length > 0) {
       allIssues.push(...result.issues);
       continue;
     }
     plannedTargets.push(...result.plan.targets);
     clarifications.push(...result.plan.clarifications);
+  }
+
+  if (skippedTestCaseIssues.length > 0) {
+    fs.writeFileSync(
+      path.join(loadUnitSession().runDirectory, 'planner-skipped-test-cases.json'),
+      `${JSON.stringify(skippedTestCaseIssues, null, 2)}\n`,
+    );
+    console.warn(`⚠️ Planner đã cách ly ${new Set(skippedTestCaseIssues.flatMap(issue => issue.testCaseId ? [issue.testCaseId] : [])).size} test case không an toàn; target hợp lệ vẫn tiếp tục.`);
   }
 
   const session = loadUnitSession();
@@ -466,12 +492,13 @@ async function runStructuredUnitPlanner(
     )),
   };
   const finalIssues = validateStructuredUnitPlan(plan, validContext);
-  if (finalIssues.length > 0) {
+  const finalBlockingIssues = finalIssues.filter(issue => issue.code !== 'UNCOVERED_BRANCH');
+  if (finalBlockingIssues.length > 0) {
     fs.writeFileSync(
       path.join(session.runDirectory, 'planner-validation-errors.json'),
-      `${JSON.stringify(finalIssues, null, 2)}\n`,
+      `${JSON.stringify(finalBlockingIssues, null, 2)}\n`,
     );
-    console.error(`❌ Unit Plan hợp nhất không hợp lệ (${finalIssues.length} lỗi).`);
+    console.error(`❌ Unit Plan hợp nhất không hợp lệ (${finalBlockingIssues.length} lỗi).`);
     return false;
   }
 

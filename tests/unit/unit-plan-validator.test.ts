@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   anchorStructuredUnitPlan,
+  salvageStructuredUnitPlan,
   validateStructuredUnitPlan,
 } from '../../src/core/unit/plan-validator.js';
 import type {
@@ -55,12 +56,12 @@ function validPlan(): StructuredUnitPlan {
         {
           id: 'UT_DISCOUNT_001', name: 'reject invalid total', branchIds: ['B001_TRUE'], inputs: { total: 0 },
           expected: { kind: 'throw', message: 'INVALID_TOTAL' }, oracleSource: 'implementation',
-          mocks: [{ module: './db', symbol: 'db', behavior: 'not called' }],
+          mocks: [{ module: './db', symbol: 'db', behavior: { kind: 'return', value: null } }],
         },
         {
           id: 'UT_DISCOUNT_002', name: 'returns valid total', branchIds: ['B001_FALSE'], inputs: { total: 100 },
           expected: { kind: 'return', value: 100 }, oracleSource: 'implementation',
-          mocks: [{ module: './db', symbol: 'db', behavior: 'returns no persisted discount' }],
+          mocks: [{ module: './db', symbol: 'db', behavior: { kind: 'return', value: null } }],
         },
       ],
     }],
@@ -82,7 +83,7 @@ describe('Structured Unit Plan validator', () => {
       inputs: { total: 100 },
       expected: { kind: 'side-effect', calls: [] },
       oracleSource: 'type-contract',
-      mocks: [{ module: './db', symbol: 'db', behavior: 'isolated during module setup' }],
+      mocks: [{ module: './db', symbol: 'db', behavior: { kind: 'return', value: null } }],
     });
 
     expect(validateStructuredUnitPlan(plan, context())).toEqual([]);
@@ -92,7 +93,7 @@ describe('Structured Unit Plan validator', () => {
     const plan = validPlan();
     plan.targets[0].sourceHash = 'stale';
     plan.targets[0].testCases[0].branchIds = ['B999_FAKE'];
-    plan.targets[0].testCases[0].mocks = [{ module: './invented', behavior: 'anything' }];
+    plan.targets[0].testCases[0].mocks = [{ module: './invented', behavior: { kind: 'return', value: null } }];
     const codes = validateStructuredUnitPlan(plan, context()).map(issue => issue.code);
 
     expect(codes).toContain('STALE_OR_INVENTED_SOURCE_HASH');
@@ -108,7 +109,7 @@ describe('Structured Unit Plan validator', () => {
       boundary: 'internal', strategy: 'real', resolvedFile: 'src/math.ts',
     });
     const plan = validPlan();
-    plan.targets[0].testCases[0].mocks = [{ module: './math', behavior: 'fake rounding' }];
+    plan.targets[0].testCases[0].mocks = [{ module: './math', behavior: { kind: 'return', value: 1 } }];
     const codes = validateStructuredUnitPlan(plan, ctx).map(issue => issue.code);
 
     expect(codes).toContain('MOCK_OF_REAL_DEPENDENCY');
@@ -192,5 +193,20 @@ describe('Structured Unit Plan validator', () => {
     delete plan.targets[0].testCases[0].constructorInputs;
     expect(validateStructuredUnitPlan(plan, ctx).map(issue => issue.code))
       .toContain('MISSING_REQUIRED_CONSTRUCTOR_INPUT');
+  });
+
+  it('isolates an invalid test intent instead of discarding the whole target', () => {
+    const plan = validPlan();
+    plan.targets[0].testCases[0].inputs = { total: 'wrong-type' };
+
+    const salvaged = salvageStructuredUnitPlan(plan, context());
+
+    expect(salvaged.blockingIssues).toEqual([]);
+    expect(salvaged.plan?.targets[0].testCases.map(testCase => testCase.id))
+      .toEqual(['UT_DISCOUNT_002']);
+    expect(salvaged.skippedIssues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ testCaseId: 'UT_DISCOUNT_001', code: 'INPUT_TYPE_MISMATCH' }),
+      expect.objectContaining({ code: 'UNCOVERED_BRANCH' }),
+    ]));
   });
 });

@@ -303,7 +303,7 @@ Generator chi duoc import source that; khong copy ham vao file test.
             message: "Chọn target cần sinh test:",
             pageSize: 20,
             choices: eligibleTargets.map(target => ({
-              name: `${target.sourceFile} → ${target.symbol} [${target.executionMode}]`,
+              name: `${target.sourceFile} → ${target.symbol} [${target.profile}]`,
               value: target.id,
             })),
             validate: value => value.length > 0 ? true : "Phải chọn ít nhất một target.",

@@ -55,6 +55,15 @@ Nếu target gọi helper trong `supportingContext.callGraph`, phải trace hàn
 - Mọi test gọi target phải liệt kê đầy đủ tất cả dependency `strategy=mock`; không mock dependency `strategy=real` hoặc `native-environment`.
 - `executionMode` phải chép nguyên từ Unit Context.
 - `profile` phải chép nguyên từ Testability Classifier. Không biến `INTEGRATION_SANDBOX` thành unit mock để dễ sinh test.
+- Planner chỉ tạo **Test Intent JSON**. Generator deterministic tự dựng import, `vi.mock`, constructor, invocation và assertion; tuyệt đối không đưa code TypeScript vào bất kỳ field nào.
+- Mỗi operation trong `dependency.usedMembers` phải có một mock riêng với `symbol` đúng nguyên văn. Ví dụ `fs` có `usedMembers=["existsSync","readFileSync"]` thì mỗi test phải cấu hình cả hai operation.
+- `behavior` bắt buộc là object có cấu trúc, không dùng câu mô tả tự nhiên:
+  - Trả đồng bộ: `{ "kind": "return", "value": ... }`
+  - Trả Promise: `{ "kind": "resolve", "value": ... }`
+  - Ném lỗi: `{ "kind": "throw", "message": "..." }`
+  - Promise reject: `{ "kind": "reject", "message": "..." }`
+  - Nhiều lần gọi: thêm `"sequence": [{ "kind": "return", "value": ... }]`.
+  - Trả object có method async: `{ "kind": "resolve", "methods": { "json": { "kind": "resolve", "value": {...} } } }`.
 
 ## Định dạng đầu ra bắt buộc
 
@@ -91,7 +100,11 @@ Chỉ xuất một JSON object, không dùng markdown:
           },
           "oracleSource": "requirement | type-contract | existing-test | implementation",
           "mocks": [
-            { "module": "dependency có thật", "symbol": "tên import", "behavior": "mô tả kết quả mock" }
+            {
+              "module": "dependency có thật",
+              "symbol": "operation trong usedMembers",
+              "behavior": { "kind": "return | resolve | reject | throw", "value": "dữ liệu nếu có" }
+            }
           ],
           "notes": []
         }

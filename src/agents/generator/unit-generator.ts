@@ -1,8 +1,7 @@
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import * as ts from 'typescript';
-import { OpenAIAdapter } from '../../adapters/openai.js';
+import { compileUnitTestFile } from '../../core/unit/compiler/test-file-compiler.js';
 import {
   freshSourceHash,
   freshUnitFileHash,
@@ -16,51 +15,15 @@ import type {
   UnitGenerationTargetResult,
   UnitPlanTarget,
   UnitTarget,
-  UnitTestabilityProfile,
 } from '../../core/unit/schema.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-const PROFILE_PROMPTS: Partial<Record<UnitTestabilityProfile, string>> = {
-  UNIT_NATIVE: 'unit-native.md',
-  UNIT_MOCKED: 'unit-mocked.md',
-  PROCESS_SANDBOX: 'process-sandbox.md',
-  COMPONENT_DOM: 'component-dom.md',
-  INTEGRATION_SANDBOX: 'integration-sandbox.md',
-  ENTRYPOINT_SMOKE: 'entrypoint-smoke.md',
-};
-
-function readProfilePrompt(profile: UnitTestabilityProfile): string {
-  const file = PROFILE_PROMPTS[profile];
-  return file
-    ? fs.readFileSync(path.join(__dirname, 'unit-prompts', file), 'utf-8')
-    : `# Profile: ${profile}\n\nProfile này không sinh runtime test.`;
-}
-
-function projectDependencies(projectRoot: string): Record<string, string> {
-  try {
-    const pkg = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf-8')) as {
-      dependencies?: Record<string, string>;
-      devDependencies?: Record<string, string>;
-    };
-    return { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
-  } catch {
-    return {};
-  }
-}
-
-function profileCapability(target: UnitTarget, projectRoot: string): { supported: boolean; reason?: string } {
+function profileCapability(target: UnitTarget): { supported: boolean; reason?: string } {
   if (['UNIT_NATIVE', 'UNIT_MOCKED', 'PROCESS_SANDBOX'].includes(target.profile)) return { supported: true };
   if (target.profile === 'COMPONENT_DOM') {
-    const dependencies = projectDependencies(projectRoot);
-    const hasDom = Boolean(dependencies.jsdom || dependencies['happy-dom']);
-    const hasLibrary = Boolean(
-      dependencies['@testing-library/react'] || dependencies['@vue/test-utils']
-      || dependencies['@testing-library/vue'] || dependencies['@testing-library/svelte'],
-    );
-    return hasDom && hasLibrary
-      ? { supported: true }
-      : { supported: false, reason: 'Dự án thiếu DOM environment hoặc component testing library tương ứng.' };
+    return {
+      supported: false,
+      reason: 'COMPONENT_DOM cần compiler adapter theo framework; không dùng template function thông thường để tránh test sai.',
+    };
   }
   if (target.profile === 'INTEGRATION_SANDBOX') {
     return { supported: false, reason: 'Chưa phát hiện sandbox database/backend an toàn; không tự kết nối hạ tầng thật.' };
@@ -94,7 +57,7 @@ function withoutSourceExtension(value: string): string {
 function relativeModulePath(fromDirectory: string, absoluteModule: string): string {
   let relative = toPosix(path.relative(fromDirectory, absoluteModule));
   if (!relative.startsWith('.')) relative = `./${relative}`;
-  if (/\.(?:ts|tsx|mts|cts)$/i.test(relative)) return withoutSourceExtension(relative);
+  if (/\.(?:ts|tsx|mts|cts)$/i.test(relative)) return relative.replace(/\.(?:ts|tsx|mts|cts)$/i, '.js');
   return relative;
 }
 
@@ -129,11 +92,6 @@ function datedUniqueTestPath(
     version++;
   }
   return candidate;
-}
-
-function extractCode(rawOutput: string): string {
-  const fenced = rawOutput.match(/```(?:typescript|ts|javascript|js)?\s*([\s\S]*?)```/i);
-  return (fenced?.[1] || rawOutput).trim().replace(/^\/\/ FILE:.*\n?/m, '').trim();
 }
 
 function findTsConfig(projectRoot: string): string | undefined {
@@ -405,47 +363,6 @@ export function validateGeneratedUnitCode(options: {
   return { ok: errors.length === 0, errors };
 }
 
-function buildPrompt(options: {
-  systemPrompt: string;
-  target: UnitTarget;
-  planTarget: UnitPlanTarget;
-  framework: 'vitest' | 'jest';
-  importPath: string;
-  dependencyPaths: Map<string, string>;
-  requirements?: string;
-  outputLanguage: 'TypeScript' | 'JavaScript';
-}): string {
-  const dependencies = options.target.dependencies.map(dependency => ({
-    ...dependency,
-    testImportPath: options.dependencyPaths.get(dependency.module),
-  }));
-  const importSymbol = options.target.classMethod?.className || options.target.symbol;
-  const importAlias = importSymbol === 'default'
-    ? `${slug(path.basename(withoutSourceExtension(options.target.sourceFile))).replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase())}Target`
-    : importSymbol;
-  const requiredTargetImport = options.target.defaultExport
-    ? `import ${importAlias} from '${options.importPath}';`
-    : `import { ${importSymbol} } from '${options.importPath}';`;
-  const profilePrompt = readProfilePrompt(options.target.profile);
-  return `${options.systemPrompt}\n\n[PROFILE TEMPLATE BẮT BUỘC]\n${profilePrompt}\n\n[FRAMEWORK]\n${options.framework}\n\n[NGÔN NGỮ FILE TEST]\n${options.outputLanguage}\n\n[IMPORT TARGET BẮT BUỘC]\n${requiredTargetImport}\n\n[TARGET ĐÃ XÁC MINH]\n${JSON.stringify({
-    sourceFile: options.target.sourceFile,
-    symbol: options.target.symbol,
-    kind: options.target.kind,
-    defaultExport: options.target.defaultExport,
-    async: options.target.async,
-    parameters: options.target.parameters,
-    returnType: options.target.returnType,
-    classMethod: options.target.classMethod,
-    sourceHash: options.target.sourceHash,
-    executionMode: options.target.executionMode,
-    profile: options.target.profile,
-    runtimeEnvironment: options.target.runtimeEnvironment,
-    sourceImportPath: options.importPath,
-    dependencies,
-    rawCode: options.target.rawCode,
-  })}\n\n[SUPPORTING CONTEXT REACHABLE ĐÃ XÁC MINH]\n${JSON.stringify(options.target.supportingContext)}\n\n[TEST PLAN ĐÃ XÁC MINH]\n${JSON.stringify(options.planTarget)}\n\n[REQUIREMENTS]\n${options.requirements || 'Không có; mọi expected suy ra từ implementation phải được giữ đúng như Planner đã đánh dấu.'}\n\nChỉ xuất một file ${options.outputLanguage} hoàn chỉnh trong code fence. Không giải thích.`;
-}
-
 export function buildGenerationManifest(results: UnitGenerationTargetResult[]) {
   const generatedFiles = results.flatMap(result => result.file ? [result.file] : []);
   const statusCounts = Object.fromEntries(
@@ -459,8 +376,8 @@ export function buildGenerationManifest(results: UnitGenerationTargetResult[]) {
     generatedAt: new Date().toISOString(),
     summary: {
       total: results.length,
-      generated: results.filter(result => result.status === 'GENERATED').length,
-      notGenerated: results.filter(result => result.status !== 'GENERATED').length,
+      generated: results.filter(result => Boolean(result.file)).length,
+      notGenerated: results.filter(result => !result.file).length,
       statusCounts,
     },
     generatedFiles,
@@ -485,7 +402,7 @@ function updateUntestableTargets(sessionDirectory: string, results: UnitGenerati
   const generatedIds = new Set(results.map(result => result.target));
   const targets = [
     ...existing.filter(item => !generatedIds.has(String(item.target))),
-    ...results.filter(result => result.status !== 'GENERATED').map(result => ({
+    ...results.filter(result => !result.file).map(result => ({
       target: result.target,
       profile: result.profile,
       status: result.status,
@@ -512,7 +429,6 @@ export async function runUnitGenerator(options: {
   }
   const framework = context.project.testFramework;
   const plan = JSON.parse(fs.readFileSync(session.planPath, 'utf-8')) as StructuredUnitPlan;
-  const systemPrompt = fs.readFileSync(path.join(__dirname, 'prompt-unit.md'), 'utf-8');
   const outputDirectory = path.join(context.project.projectRoot, 'tests', 'unit', 'ai-generated');
   fs.mkdirSync(outputDirectory, { recursive: true });
 
@@ -528,12 +444,21 @@ export async function runUnitGenerator(options: {
       results.push({ target: label, profile: planTarget.profile || 'REFACTOR_REQUIRED', status: 'STATIC_VALIDATION_FAILED', errors: ['Unit Context không chứa target của Planner.'] });
       continue;
     }
-    const capability = profileCapability(target, context.project.projectRoot);
+    const capability = profileCapability(target);
     if (!capability.supported) {
       const status = target.profile === 'NO_RUNTIME_TEST'
         ? 'NO_RUNTIME'
         : target.profile === 'REFACTOR_REQUIRED' ? 'REFACTOR_REQUIRED' : 'PROFILE_NOT_SUPPORTED';
       results.push({ target: label, profile: target.profile, status, errors: [capability.reason || 'Profile chưa được hỗ trợ.'] });
+      continue;
+    }
+    if (framework !== 'vitest') {
+      results.push({
+        target: label,
+        profile: target.profile,
+        status: 'PROFILE_NOT_SUPPORTED',
+        errors: ['Deterministic Unit Compiler hiện hỗ trợ Vitest. Dự án Jest cần compiler adapter riêng.'],
+      });
       continue;
     }
     const currentHash = freshSourceHash(target, context.project.projectRoot);
@@ -565,52 +490,48 @@ export async function runUnitGenerator(options: {
         dependencyTestImportPath(dependency, context.project.projectRoot, outputDirectory),
       ]),
     );
-    const prompt = buildPrompt({
-      systemPrompt,
+    console.log(`   Biên dịch deterministic ${label} [${target.profile}]...`);
+    const compiled = compileUnitTestFile({
       target,
       planTarget,
       framework,
       importPath,
       dependencyPaths,
-      requirements: context.requirements,
-      outputLanguage: /\.(?:js|jsx|mjs|cjs)$/i.test(target.sourceFile) ? 'JavaScript' : 'TypeScript',
     });
-    console.log(`   Sinh test ${label} (${prompt.length.toLocaleString('vi-VN')} ký tự)...`);
-    const workDir = path.join(process.cwd(), '.testkit', 'runs', `unit_gen_${Date.now()}_${slug(target.symbol)}`);
-    fs.mkdirSync(workDir, { recursive: true });
-    fs.writeFileSync(path.join(workDir, 'task.md'), prompt);
-    const adapter = new OpenAIAdapter('llama-3.3-70b-versatile');
-    let result = await adapter.run({ promptDir: workDir, workDir, timeoutMs: 120000, maxTokens: 3500 });
-    if (!result.ok) {
-      results.push({ target: label, profile: target.profile, status: 'AI_GENERATION_FAILED', errors: [result.rawOutput] });
+    if (!compiled.code) {
+      results.push({
+        target: label,
+        profile: target.profile,
+        status: 'STATIC_VALIDATION_FAILED',
+        errors: compiled.testCases.flatMap(testCase => testCase.errors),
+        testCases: compiled.testCases,
+      });
       continue;
     }
-    let code = extractCode(result.rawOutput);
-    let validation = validateGeneratedUnitCode({ code, target, planTarget, importPath, framework, dependencyPaths });
+    const generatedIds = new Set(compiled.testCases
+      .filter(testCase => testCase.status === 'GENERATED')
+      .map(testCase => testCase.testCaseId));
+    const generatedPlanTarget = {
+      ...planTarget,
+      testCases: planTarget.testCases.filter(testCase => generatedIds.has(testCase.id)),
+    };
+    const validation = validateGeneratedUnitCode({
+      code: compiled.code,
+      target,
+      planTarget: generatedPlanTarget,
+      importPath,
+      framework,
+      dependencyPaths,
+    });
     if (!validation.ok) {
-      console.warn(`   Generator output chưa đạt hợp đồng (${validation.errors.length} lỗi), đang tự sửa một lần...`);
-      fs.writeFileSync(path.join(session.runDirectory, `${slug(target.symbol)}.invalid-attempt-1.txt`), `${result.rawOutput}\n`);
-      const repairDirectory = path.join(process.cwd(), '.testkit', 'runs', `unit_gen_repair_${Date.now()}_${slug(target.symbol)}`);
-      fs.mkdirSync(repairDirectory, { recursive: true });
-      const repairPrompt = `${prompt}\n\n[LỖI STATIC CONTRACT CẦN SỬA]\n${JSON.stringify(validation.errors)}\n\nSinh lại TOÀN BỘ file test. Không giải thích, không bỏ test case.`;
-      fs.writeFileSync(path.join(repairDirectory, 'task.md'), repairPrompt);
-      const repaired = await adapter.run({
-        promptDir: repairDirectory,
-        workDir: repairDirectory,
-        timeoutMs: 120000,
-        maxTokens: 3500,
+      results.push({
+        target: label,
+        profile: target.profile,
+        status: 'STATIC_VALIDATION_FAILED',
+        errors: [`Lỗi nội bộ deterministic compiler: ${validation.errors.join(' | ')}`],
+        testCases: compiled.testCases,
       });
-      if (repaired.ok) {
-        result = repaired;
-        code = extractCode(result.rawOutput);
-        validation = validateGeneratedUnitCode({ code, target, planTarget, importPath, framework, dependencyPaths });
-      } else {
-        validation = { ok: false, errors: [...validation.errors, repaired.rawOutput] };
-      }
-    }
-    if (!validation.ok) {
-      results.push({ target: label, profile: target.profile, status: 'STATIC_VALIDATION_FAILED', errors: validation.errors });
-      fs.writeFileSync(path.join(session.runDirectory, `${slug(target.symbol)}.invalid.txt`), `${result.rawOutput}\n`);
+      fs.writeFileSync(path.join(session.runDirectory, `${slug(target.symbol)}.compiler-invalid.ts`), compiled.code);
       continue;
     }
     const testPath = datedUniqueTestPath(
@@ -618,7 +539,7 @@ export async function runUnitGenerator(options: {
       target,
       /\.(?:js|jsx|mjs|cjs)$/i.test(target.sourceFile) ? '.test.js' : '.test.ts',
     );
-    fs.writeFileSync(testPath, `${code}\n`);
+    fs.writeFileSync(testPath, `${compiled.code.trim()}\n`);
     const typeErrors = typecheckGeneratedUnitFile(context.project.projectRoot, testPath);
     if (typeErrors.length > 0) {
       fs.rmSync(testPath, { force: true });
@@ -627,12 +548,21 @@ export async function runUnitGenerator(options: {
         profile: target.profile,
         status: 'TYPECHECK_FAILED',
         errors: typeErrors.map(error => `TypeScript preflight: ${error}`),
+        testCases: compiled.testCases,
       });
       fs.writeFileSync(path.join(session.runDirectory, `${slug(target.symbol)}.typecheck-errors.json`), `${JSON.stringify(typeErrors, null, 2)}\n`);
       continue;
     }
     generatedFiles.push(testPath);
-    results.push({ target: label, profile: target.profile, status: 'GENERATED', file: testPath, errors: [] });
+    const skippedCases = compiled.testCases.filter(testCase => testCase.status !== 'GENERATED');
+    results.push({
+      target: label,
+      profile: target.profile,
+      status: skippedCases.length > 0 ? 'PARTIAL' : 'GENERATED',
+      file: testPath,
+      errors: skippedCases.flatMap(testCase => testCase.errors),
+      testCases: compiled.testCases,
+    });
     console.log(`   ✅ Đã tạo: ${testPath}`);
   }
 
@@ -649,7 +579,11 @@ export async function runUnitGenerator(options: {
   }, session);
   writeGenerationManifest(session.runDirectory, results);
   updateUntestableTargets(session.runDirectory, results);
-  const notGenerated = results.filter(result => result.status !== 'GENERATED');
+  const notGenerated = results.filter(result => !result.file);
+  const partialTargets = results.filter(result => result.status === 'PARTIAL');
+  if (partialTargets.length > 0) {
+    console.warn(`⚠️ ${partialTargets.length} target được sinh một phần; xem trạng thái từng test case trong generation-manifest.json.`);
+  }
   if (notGenerated.length > 0) {
     console.warn(`⚠️ ${notGenerated.length}/${results.length} target chưa sinh được; batch vẫn tiếp tục. Chi tiết: ${path.join(session.runDirectory, 'generation-manifest.json')}`);
   }

@@ -338,13 +338,20 @@ Vi du:
     }
     const { requirements } = await inquirer.prompt([
       {
-        type: "input",
+        type: "editor",
         name: "requirements",
-        message: "Yêu cầu nghiệp vụ/expected bổ sung (có thể để trống, không nhập secret):",
+        message: "Nhập yêu cầu nghiệp vụ/expected nhiều dòng (lưu và đóng editor khi xong):",
       },
     ]);
+    const normalizedRequirements = String(requirements || "").trim();
+    if (normalizedRequirements) {
+      const requirementLineCount = normalizedRequirements.split(/\r?\n/).length;
+      success(`Đã nhận đầy đủ ${requirementLineCount} dòng yêu cầu nghiệp vụ.`);
+    } else {
+      detail("Yêu cầu nghiệp vụ", "Để trống; hệ thống chỉ kiểm tra hành vi suy ra từ source.");
+    }
     try {
-      const prepared = createUnitSession(analysis, selectedTargetIds, requirements);
+      const prepared = createUnitSession(analysis, selectedTargetIds, normalizedRequirements);
       contextData = JSON.stringify(prepared.context);
       success("Đã chuẩn bị dữ liệu cho Planner.");
       artifact("Phiên chạy", path.basename(prepared.session.runDirectory));

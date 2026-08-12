@@ -59,6 +59,32 @@ describe('Unit Oracle Resolver', () => {
       .toBe('NEEDS_ORACLE');
   });
 
+  it('accepts an expected result explicitly confirmed by the tester in CLI', () => {
+    const testCase = planned(999);
+    testCase.oracleSource = 'tester-confirmation';
+    testCase.oracleEvidence = {
+      status: 'verified',
+      source: 'tester-confirmation',
+      reference: 'CLI-20260812-UT_SUM_001',
+    };
+    expect(resolveUnitTestOracle({}, target(), testCase)).toMatchObject({
+      status: 'VERIFIED',
+      evidence: { source: 'tester-confirmation', status: 'verified' },
+    });
+  });
+
+  it('rejects a forged tester confirmation without an audit reference', () => {
+    const testCase = planned(999);
+    testCase.oracleSource = 'tester-confirmation';
+    testCase.oracleEvidence = {
+      status: 'verified',
+      source: 'tester-confirmation',
+    };
+    const result = resolveUnitTestOracle({}, target(), testCase);
+    expect(result.status).toBe('NEEDS_ORACLE');
+    expect(result.errors.join(' ')).toContain('reference');
+  });
+
   it('does not statically execute a target with mocked IO dependencies', () => {
     const ioTarget: UnitTarget = {
       ...target('export function sum(left: number, right: number) { return fs.readFileSync("x"); }'),

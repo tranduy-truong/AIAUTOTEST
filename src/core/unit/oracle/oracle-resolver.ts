@@ -62,6 +62,27 @@ function verifyRequirement(
   };
 }
 
+function verifyTesterConfirmation(testCase: UnitPlannedTestCase): UnitOracleResolution | undefined {
+  if (testCase.oracleSource !== 'tester-confirmation'
+    && testCase.oracleEvidence?.source !== 'tester-confirmation') return undefined;
+  const evidence = testCase.oracleEvidence;
+  if (evidence?.source !== 'tester-confirmation'
+    || evidence.status !== 'verified'
+    || !evidence.reference?.trim()) {
+    return {
+      testCaseId: testCase.id,
+      status: 'NEEDS_ORACLE',
+      errors: ['Xác nhận của tester thiếu audit reference hợp lệ từ CLI.'],
+    };
+  }
+  return {
+    testCaseId: testCase.id,
+    status: 'VERIFIED',
+    evidence,
+    errors: [],
+  };
+}
+
 function verifyImplementation(target: UnitTarget, testCase: UnitPlannedTestCase): UnitOracleResolution {
   const evaluated = evaluateTargetStatically(target, testCase.inputs, testCase.mocks);
   if (!evaluated.supported) {
@@ -123,6 +144,8 @@ export function resolveUnitTestOracle(
       errors: schemaIssues.map(issue => `${issue.path}: ${issue.message}`),
     };
   }
+  const testerConfirmation = verifyTesterConfirmation(testCase);
+  if (testerConfirmation) return testerConfirmation;
   const requirement = verifyRequirement(testCase, context.requirements);
   if (requirement) return requirement;
   if (testCase.oracleSource === 'implementation'

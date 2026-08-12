@@ -670,7 +670,7 @@ export async function runUnitGenerator(options: {
         proposedExpected: plannedCase?.expected,
         proposedOracleSource: plannedCase?.oracleSource,
         reasons: testCase.errors,
-        nextAction: 'Chạy lại target và nhập kết quả mong đợi ở ô "Yêu cầu nghiệp vụ/expected bổ sung".',
+        nextAction: 'Xác nhận trực tiếp trên CLI; hệ thống sẽ tự lưu và chạy lại Generator.',
       };
     }));
   fs.writeFileSync(path.join(session.runDirectory, 'oracle-requests.json'), `${JSON.stringify({
@@ -699,8 +699,7 @@ export async function runUnitGenerator(options: {
 
   if (oracleRequests.length > 0) {
     warning(`${oracleRequests.length} test case chưa có kết quả mong đợi đủ tin cậy.`);
-    detail('Làm tiếp', 'Chạy lại target và nhập expected nghiệp vụ ở câu hỏi bổ sung.');
-    artifact('Danh sách cần nhập', 'oracle-requests.json');
+    detail('Làm tiếp', 'CLI sẽ hiển thị từng trường hợp để tester xác nhận ngay.');
   }
   if (partialTargets.length > 0) {
     warning(`${partialTargets.length} target mới sinh được một phần.`);
@@ -719,7 +718,7 @@ export async function runUnitGenerator(options: {
     success(`Hoàn tất ${generatedFiles.length} file Unit Test.`);
     artifact('Thư mục kết quả', outputDirectory);
   } else if (oracleRequests.length > 0) {
-    warning('Chưa tạo file test vì toàn bộ test case đang chờ xác nhận expected.');
+    warning('Chưa tạo file test vì các kết quả nghiệp vụ đang chờ tester xác nhận trên CLI.');
   }
   return generatedFiles.length > 0;
 }

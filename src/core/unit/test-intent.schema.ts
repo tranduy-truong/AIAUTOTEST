@@ -18,6 +18,7 @@ const evidenceStatuses = new Set(['verified', 'proposed', 'observed']);
 const evidenceSources = new Set([
   'requirement', 'existing-test', 'return-literal', 'throw-literal',
   'pure-evaluation', 'mock-trace', 'sandbox-observation', 'ai-inference',
+  'tester-confirmation',
 ]);
 
 export function validateExpectedIntent(expected: UnitExpectedResult, path = 'expected'): TestIntentSchemaIssue[] {
@@ -89,6 +90,13 @@ export function validateOracleEvidence(
   }
   if (evidence.source === 'requirement' && (!evidence.reference || !evidence.reference.trim())) {
     issues.push({ path: `${path}.reference`, message: 'Requirement evidence cần exact reference.' });
+  }
+  if (evidence.source === 'tester-confirmation'
+    && (evidence.status !== 'verified' || !evidence.reference?.trim())) {
+    issues.push({
+      path,
+      message: 'Tester confirmation cần status=verified và mã tham chiếu xác nhận từ CLI.',
+    });
   }
   if (evidence.source === 'existing-test' && (!evidence.testFile || !evidence.testCaseId)) {
     issues.push({ path, message: 'Existing-test evidence cần testFile và testCaseId.' });

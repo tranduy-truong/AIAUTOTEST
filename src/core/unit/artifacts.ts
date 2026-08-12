@@ -191,9 +191,13 @@ export function updateUnitSession(update: Partial<UnitSession>, session = loadUn
   return next;
 }
 
-export function saveUnitPlan(plan: StructuredUnitPlan, session = loadUnitSession()): void {
+export function saveUnitPlan(
+  plan: StructuredUnitPlan,
+  session = loadUnitSession(),
+  cwd = process.cwd(),
+): void {
   writeJson(session.planPath, plan);
-  writeJson(path.join(process.cwd(), 'artifacts', 'test-plan-unit.json'), plan);
+  writeJson(path.join(cwd, 'artifacts', 'test-plan-unit.json'), plan);
 }
 
 export function freshSourceHash(target: UnitTarget, projectRoot: string): string {

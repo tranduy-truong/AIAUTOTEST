@@ -6,6 +6,7 @@ import { TestPolicyHarness } from "./harness/policy.js";
 
 import { loadStructuredE2EPlan, runPlanner } from "./agents/planner/run.js";
 import { runGenerator } from "./agents/generator/run.js";
+import { runUnitGenerator } from "./agents/generator/unit-generator.js";
 import { runHealer } from "./agents/healer/run.js";
 import { plannerPlanToTestCases } from "./agents/planner/schema.js";
 import { buildActionPlan } from "./core/action-plan.js";
@@ -13,6 +14,14 @@ import { buildCompactDomReport, runLive } from "./agents/crawler/live-runner.js"
 import { analyzeUnitInput, createUnitSession } from "./core/unit/artifacts.js";
 import { runLastGeneratedUnitTests, summarizeUnitRunOutput } from "./core/unit/runner.js";
 import { runUnitCoverageGuidedLoop } from "./agents/planner/unit-coverage-loop.js";
+import {
+  applyUnitOracleConfirmations,
+  formatExpectedForTester,
+  formatInputsForTester,
+  humanizeUnitTarget,
+  loadPendingUnitOracleRequests,
+  parseTesterDataValue,
+} from "./core/unit/oracle/oracle-confirmation.js";
 import {
   artifact,
   detail,
@@ -57,10 +66,14 @@ async function mainMenu() {
           value: "run_unit",
         },
         {
-          name: menuChoice("05", "Xem báo cáo", "Kết quả gần nhất"),
+          name: menuChoice("05", "Xác nhận kết quả Unit", "Tiếp tục phiên đang chờ"),
+          value: "review_unit_oracles",
+        },
+        {
+          name: menuChoice("06", "Xem báo cáo", "Kết quả gần nhất"),
           value: "view_report",
         },
-        { name: menuChoice("06", "Thoát", "Đóng ứng dụng"), value: "exit" },
+        { name: menuChoice("07", "Thoát", "Đóng ứng dụng"), value: "exit" },
       ],
     },
   ]);
@@ -78,6 +91,10 @@ async function mainMenu() {
     case "run_unit":
       await runTests("unit");
       break;
+    case "review_unit_oracles":
+      await reviewPendingUnitOracles({ askToStart: false });
+      await returnToMenu();
+      return;
     case "view_report":
       showReport();
       break;
@@ -384,10 +401,202 @@ Vi du:
       }
 
       await runGenerator(level, targetName);
+      if (level === "unit") {
+        await reviewPendingUnitOracles({ askToStart: true });
+      }
     }
   }
 
   await returnToMenu();
+}
+
+function editableOracleValue(value) {
+  if (value && typeof value === "object" && value.$type === "undefined") return "undefined";
+  if (typeof value === "string") return value;
+  if (value === undefined) return "";
+  return JSON.stringify(value);
+}
+
+async function askTesterExpected(proposed) {
+  if (!proposed) throw new Error("Chưa có dạng kết quả đề xuất để tester chỉnh sửa an toàn.");
+  const kind = proposed.kind;
+  if (kind === "return" || kind === "resolve") {
+    const { rawValue } = await inquirer.prompt([
+      {
+        type: "input",
+        name: "rawValue",
+        message: "Nhập giá trị đúng (ví dụ: true, 10, văn bản hoặc JSON):",
+        default: editableOracleValue(proposed?.value),
+        validate: value => {
+          try {
+            parseTesterDataValue(value);
+            return true;
+          } catch (error) {
+            return error.message;
+          }
+        },
+      },
+    ]);
+    return { kind, value: parseTesterDataValue(rawValue) };
+  }
+  const proposedMessage = proposed?.error?.message?.value
+    || proposed?.message
+    || (typeof proposed?.value === "string" ? proposed.value : "");
+  const { errorMessage, match } = await inquirer.prompt([
+    {
+      type: "input",
+      name: "errorMessage",
+      message: "Thông báo lỗi đúng là gì?",
+      default: proposedMessage,
+      validate: value => value.trim() ? true : "Thông báo lỗi không được để trống.",
+    },
+    {
+      type: "list",
+      name: "match",
+      message: "So sánh thông báo lỗi theo cách nào?",
+      choices: [
+        { name: "Chỉ cần có chứa nội dung này (khuyến nghị)", value: "contains" },
+        { name: "Phải giống hoàn toàn", value: "equals" },
+      ],
+    },
+  ]);
+  return {
+    kind,
+    error: { message: { match, value: errorMessage.trim() } },
+  };
+}
+
+function showOracleRequest(request, index, total) {
+  section("03", `Xác nhận kết quả ${index + 1}/${total}`, "Không cần đọc source code hay mở file JSON");
+  summary("Tester cần quyết định", [
+    ["Chức năng", humanizeUnitTarget(request.target)],
+    ["Trường hợp", request.name || request.testCaseId],
+    ["Đề xuất", formatExpectedForTester(request.proposedExpected)],
+  ], "warning");
+  console.log(`\n   ${paint.bold("Dữ liệu đầu vào")}`);
+  for (const line of formatInputsForTester(request.inputs)) detail("", line);
+  console.log(`\n   ${paint.muted("Hệ thống chưa thể tự chứng minh kết quả này từ mã nguồn.")}`);
+  console.log(`   ${paint.muted("Tester chỉ xác nhận khi đây đúng là hành vi mong muốn của nghiệp vụ.")}`);
+}
+
+async function reviewPendingUnitOracles({ askToStart = true } = {}) {
+  let requests;
+  try {
+    requests = loadPendingUnitOracleRequests();
+  } catch (error) {
+    uiError(`Không đọc được phiên Unit hiện tại: ${error.message}`);
+    return false;
+  }
+  if (requests.length === 0) {
+    success("Không có test case Unit nào đang chờ xác nhận.");
+    return false;
+  }
+  if (askToStart) {
+    const { startReview } = await inquirer.prompt([
+      {
+        type: "confirm",
+        name: "startReview",
+        message: `Có ${requests.length} kết quả cần tester xác nhận. Xác nhận ngay trên CLI?`,
+        default: true,
+      },
+    ]);
+    if (!startReview) {
+      detail("Làm sau", "Chọn mục 05 - Xác nhận kết quả Unit ở menu chính.");
+      return false;
+    }
+  }
+
+  const confirmations = [];
+  for (let index = 0; index < requests.length; index += 1) {
+    const request = requests[index];
+    let decided = false;
+    while (!decided) {
+      showOracleRequest(request, index, requests.length);
+      const choices = [];
+      if (request.proposedExpected) {
+        choices.push({
+          name: "Đúng, dùng kết quả hệ thống đang đề xuất",
+          value: "confirm",
+        });
+        if (request.proposedExpected.kind !== "side-effect") {
+          choices.push({ name: "Kết quả chưa đúng, tôi muốn nhập lại", value: "edit" });
+        }
+      }
+      choices.push(
+        { name: "Tạm bỏ qua test case này", value: "skip" },
+        { name: "Cần BA/Developer xác nhận thêm", value: "review" },
+        { name: "Xem lý do kỹ thuật", value: "details" },
+        { name: "Dừng tại đây và lưu các lựa chọn đã làm", value: "stop" },
+      );
+      const { action } = await inquirer.prompt([
+        {
+          type: "list",
+          name: "action",
+          message: "Kết quả mong đợi đúng là gì?",
+          choices,
+        },
+      ]);
+      if (action === "details") {
+        warning("Giải thích kỹ thuật (chỉ để tham khảo):");
+        for (const reason of request.reasons || []) detail("", reason);
+        continue;
+      }
+      if (action === "stop") {
+        index = requests.length;
+        break;
+      }
+      const confirmedAt = new Date().toISOString();
+      if (action === "confirm") {
+        confirmations.push({
+          target: request.target,
+          testCaseId: request.testCaseId,
+          status: "CONFIRMED",
+          expected: request.proposedExpected,
+          confirmedAt,
+        });
+      } else if (action === "edit") {
+        const expected = await askTesterExpected(request.proposedExpected);
+        confirmations.push({
+          target: request.target,
+          testCaseId: request.testCaseId,
+          status: "CONFIRMED",
+          expected,
+          confirmedAt,
+        });
+      } else {
+        confirmations.push({
+          target: request.target,
+          testCaseId: request.testCaseId,
+          status: action === "review" ? "NEEDS_REVIEW" : "SKIPPED",
+          confirmedAt,
+        });
+      }
+      decided = true;
+    }
+  }
+
+  if (confirmations.length === 0) return false;
+  let result;
+  try {
+    result = applyUnitOracleConfirmations(confirmations);
+  } catch (error) {
+    uiError(`Không lưu được xác nhận: ${error.message}`);
+    return false;
+  }
+  summary("Đã lưu lựa chọn của tester", [
+    ["Đã xác nhận", String(result.confirmedCount)],
+    ["Tạm bỏ qua", String(result.skippedCount)],
+    ["Cần xem lại", String(result.needsReviewCount)],
+  ], result.confirmedCount > 0 ? "success" : "warning");
+
+  if (result.confirmedTargetIds.length > 0) {
+    section("04", "Tạo lại Unit Test", "Dùng xác nhận vừa nhập • không gọi Planner • không gọi AI");
+    await runUnitGenerator({
+      preserveExistingFiles: true,
+      onlyTargetIds: result.confirmedTargetIds,
+    });
+  }
+  return result.confirmedCount > 0;
 }
 
 // 3. TÍNH NĂNG: CHẠY TEST VÀ KÍCH HOẠT CHÍNH SÁCH BẮT LỖI

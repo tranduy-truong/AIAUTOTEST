@@ -206,7 +206,8 @@ export type UnitOracleSource =
   | 'requirement'
   | 'type-contract'
   | 'existing-test'
-  | 'implementation';
+  | 'implementation'
+  | 'tester-confirmation';
 
 export type UnitOracleEvidenceStatus = 'verified' | 'proposed' | 'observed';
 
@@ -218,7 +219,8 @@ export type UnitOracleEvidenceSource =
   | 'pure-evaluation'
   | 'mock-trace'
   | 'sandbox-observation'
-  | 'ai-inference';
+  | 'ai-inference'
+  | 'tester-confirmation';
 
 /**
  * Machine-checkable provenance for an expected result. A Planner proposal is

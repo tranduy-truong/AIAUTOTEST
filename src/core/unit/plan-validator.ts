@@ -380,7 +380,7 @@ function validateTarget(planTarget: UnitPlanTarget, target: UnitTarget): UnitPla
         issues.push({ code: 'INVENTED_BRANCH', target: targetLabel, testCaseId: testCase.id, message: `Branch không tồn tại: ${branchId}` });
       } else coveredBranches.add(branchId);
     }
-    if (!['requirement', 'type-contract', 'existing-test', 'implementation'].includes(testCase.oracleSource)) {
+    if (!['requirement', 'type-contract', 'existing-test', 'implementation', 'tester-confirmation'].includes(testCase.oracleSource)) {
       issues.push({ code: 'INVALID_ORACLE_SOURCE', target: targetLabel, testCaseId: testCase.id, message: 'oracleSource không hợp lệ.' });
     }
     if (testCase.oracleEvidence !== undefined) {

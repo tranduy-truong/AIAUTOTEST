@@ -75,6 +75,48 @@ export function dataValueToRuntime(value: UnitDataValue): unknown {
   return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, dataValueToRuntime(item)]));
 }
 
+export function runtimeToDataValue(value: unknown): UnitDataValue | undefined {
+  if (value === undefined) return { $type: 'undefined' };
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return value;
+  if (typeof value === 'number') {
+    if (Number.isNaN(value)) return { $type: 'nan' };
+    if (value === Number.POSITIVE_INFINITY) return { $type: 'infinity' };
+    if (value === Number.NEGATIVE_INFINITY) return { $type: 'negative-infinity' };
+    return value;
+  }
+  if (typeof value === 'bigint') return { $type: 'bigint', value: String(value) };
+  if (value instanceof Date) return { $type: 'date', value: value.toISOString() };
+  if (value instanceof RegExp) return { $type: 'regexp', value: `${value.source}/${value.flags}` };
+  if (value instanceof Map) {
+    const entries: [UnitDataValue, UnitDataValue][] = [];
+    for (const [key, item] of value) {
+      const encodedKey = runtimeToDataValue(key);
+      const encodedValue = runtimeToDataValue(item);
+      if (encodedKey === undefined || encodedValue === undefined) return undefined;
+      entries.push([encodedKey, encodedValue]);
+    }
+    return { $type: 'map', entries };
+  }
+  if (value instanceof Set) {
+    const values = [...value].map(runtimeToDataValue);
+    return values.some(item => item === undefined) ? undefined : { $type: 'set', values: values as UnitDataValue[] };
+  }
+  if (Array.isArray(value)) {
+    const values = value.map(runtimeToDataValue);
+    return values.some(item => item === undefined) ? undefined : values as UnitDataValue[];
+  }
+  if (isRecord(value)) {
+    const output: Record<string, UnitDataValue> = {};
+    for (const [key, item] of Object.entries(value)) {
+      const encoded = runtimeToDataValue(item);
+      if (encoded === undefined) return undefined;
+      output[key] = encoded;
+    }
+    return output;
+  }
+  return undefined;
+}
+
 export function runtimeValuesEqual(left: unknown, right: unknown): boolean {
   if (Object.is(left, right)) return true;
   if (left instanceof Date && right instanceof Date) return left.getTime() === right.getTime();
@@ -221,6 +263,7 @@ function evaluateExpression(node: ts.Expression, env: Map<string, unknown>): unk
   if (node.kind === ts.SyntaxKind.TrueKeyword) return true;
   if (node.kind === ts.SyntaxKind.FalseKeyword) return false;
   if (node.kind === ts.SyntaxKind.NullKeyword) return null;
+  if (node.kind === ts.SyntaxKind.ThisKeyword) return env.get('this');
   if (ts.isIdentifier(node)) {
     if (node.text === 'undefined') return undefined;
     if (node.text === 'NaN') return Number.NaN;
@@ -469,6 +512,28 @@ function mockCallable(behavior: UnitMockOutcome & { sequence?: UnitMockOutcome[]
   };
 }
 
+function nativeCallable(implementation: (args: unknown[]) => unknown): StaticCallable {
+  return { __staticCallable: true, invoke: implementation };
+}
+
+function installSafeBuiltins(env: Map<string, unknown>): void {
+  env.set('JSON', {
+    stringify: nativeCallable(args => JSON.stringify(args[0])),
+    parse: nativeCallable(args => JSON.parse(String(args[0]))),
+  });
+  env.set('console', {
+    log: nativeCallable(() => undefined),
+    warn: nativeCallable(() => undefined),
+    error: nativeCallable(() => undefined),
+  });
+  env.set('path', {
+    join: nativeCallable(args => args.map(value => String(value).replace(/[\\/]+$/g, '')).join('/').replace(/\/+/g, '/')),
+    basename: nativeCallable(args => String(args[0]).split(/[\\/]/).pop() || ''),
+    dirname: nativeCallable(args => String(args[0]).split(/[\\/]/).slice(0, -1).join('/') || '.'),
+  });
+  env.set('this', {});
+}
+
 function installMockEnvironment(
   env: Map<string, unknown>,
   target: UnitTarget,
@@ -528,6 +593,7 @@ export function evaluateTargetStatically(
   const callable = findBody(target);
   if (!callable) return { supported: false, reason: 'Không tìm thấy function/method body.' };
   const env = new Map<string, unknown>();
+  installSafeBuiltins(env);
   const mockError = installMockEnvironment(env, target, mocks);
   if (mockError) return { supported: false, reason: mockError };
   for (const definition of target.supportingContext.constantDefinitions) {

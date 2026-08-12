@@ -89,7 +89,9 @@ Kiến trúc công khai vẫn là **Planner → Generator → Healer**. Code Rea
 - Testability Classifier gán một trong 8 profile cho từng target: `UNIT_NATIVE`, `UNIT_MOCKED`, `COMPONENT_DOM`, `INTEGRATION_SANDBOX`, `PROCESS_SANDBOX`, `ENTRYPOINT_SMOKE`, `NO_RUNTIME_TEST`, `REFACTOR_REQUIRED`.
 - Dựng call graph/type graph có giới hạn để cung cấp đúng helper, constant và interface reachable; không kéo dependency của hàm không liên quan.
 - Test sinh tại `<du-an-dich>/tests/unit/ai-generated/` và luôn import source thật.
-- Planner AI chỉ xuất **Test Intent JSON** gồm input, structured mock behavior và oracle có nguồn. AI không viết import, `vi.mock`, constructor, invocation hay assertion.
+- Planner ưu tiên dựng **Test Intent JSON** trực tiếp từ AST. Khi tester không nhập requirement bổ sung và AST đủ hợp đồng, hệ thống bỏ qua AI hoàn toàn. AI chỉ được dùng để diễn giải business requirement hoặc bổ sung target mà deterministic planner chưa dựng được.
+- Output AI hỏng JSON, bị cắt, sai hợp đồng hoặc API lỗi không còn chặn batch: parser lấy object JSON cân bằng nếu có; nếu vẫn không dùng được, Planner quay về AST deterministic. Lỗi AI chỉ được lưu trong `planner-ai-diagnostics.json`.
+- AI không viết import, `vi.mock`, constructor, invocation hay assertion; Generator chỉ nhận Test Intent JSON đã xác minh.
 - Generator dùng deterministic compiler dựa trên TypeScript Compiler API để dựng file Vitest. Vì cấu trúc code do hệ thống tạo nên không còn vòng “AI sinh file → hàng chục lỗi static → gọi AI sửa lại”.
 - File sinh vẫn phải qua static contract, TypeScript preflight và chạy bằng runner thật; phiên chạy chỉ giữ file của lần Generator thành công gần nhất.
 - Generator dung lỗi theo test case và target: case thiếu oracle/mock được ghi `NEEDS_ORACLE`/`INVALID_MOCK`, các case hợp lệ vẫn được sinh. Một target lỗi/không có sandbox không chặn target khác; trạng thái nằm trong `generation-manifest.json` và `untestable-targets.json`.
@@ -103,7 +105,7 @@ Kiến trúc công khai vẫn là **Planner → Generator → Healer**. Code Rea
 2. Chọn `AI Lên kế hoạch & Sinh Code Test` → `Unit`.
 3. Chọn thư mục dự án, một file nguồn hoặc dán một đoạn code có `export`.
 4. Chọn hàm hoặc `Class.method` cần test và nhập requirement nếu có.
-5. Planner lập Test Intent cho từng target; Generator deterministic biên dịch JSON đã xác minh thành test.
+5. Planner AST lập Test Intent cho từng target; AI chỉ bổ sung khi cần. Generator deterministic biên dịch JSON đã xác minh thành test.
 6. Chọn `Chạy kiểm thử Unit Test` ở menu để chạy các file gần nhất trong đúng thư mục dự án đích.
 
 TestKit không tự cài test runner và không gửi `.env`, secret key, test cũ, `node_modules`, `dist`, `build` hoặc `coverage` vào AI. Deterministic compiler hiện hỗ trợ Vitest; dự án Jest được báo `PROFILE_NOT_SUPPORTED` cho tới khi có Jest compiler adapter riêng.
@@ -122,6 +124,7 @@ artifacts/unit/<project>/<yyyyMMdd_HHmmss_SSS>/
 ├── context-bundle.json
 ├── test-plan-unit.json
 ├── test-plan-unit.md
+├── planner-ai-diagnostics.json (chỉ có khi AI/fallback cần ghi chẩn đoán)
 ├── generation-manifest.json
 ├── test-results.json
 ├── coverage-gaps.json

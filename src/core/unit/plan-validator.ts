@@ -17,6 +17,34 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
+function removeJsonTrailingCommas(value: string): string {
+  let output = '';
+  let quoted = false;
+  let escaped = false;
+  for (let index = 0; index < value.length; index++) {
+    const char = value[index];
+    if (quoted) {
+      output += char;
+      if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === '"') quoted = false;
+      continue;
+    }
+    if (char === '"') {
+      quoted = true;
+      output += char;
+      continue;
+    }
+    if (char === ',') {
+      let cursor = index + 1;
+      while (/\s/.test(value[cursor] || '')) cursor++;
+      if (value[cursor] === '}' || value[cursor] === ']') continue;
+    }
+    output += char;
+  }
+  return output;
+}
+
 const SPECIAL_VALUE_TYPES = new Set([
   'undefined', 'nan', 'infinity', 'negative-infinity', 'bigint', 'date', 'regexp', 'map', 'set',
 ]);
@@ -84,19 +112,59 @@ function validateMockOutcome(value: unknown, label: string, allowSequence = fals
 }
 
 export function parseStructuredUnitPlan(raw: string): StructuredUnitPlan | null {
-  const cleaned = raw
-    .replace(/^```(?:json)?\s*/i, '')
-    .replace(/```\s*$/i, '')
-    .trim();
-  try {
-    const parsed = JSON.parse(cleaned) as StructuredUnitPlan;
-    if (!isObject(parsed) || parsed.version !== 1 || parsed.source !== 'ai-planner' || !Array.isArray(parsed.targets)) {
-      return null;
+  const input = raw.replace(/^\uFEFF/, '').trim();
+  const candidates = new Set<string>([
+    input,
+    input.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim(),
+  ]);
+
+  // Some providers wrap valid JSON in a sentence or a Markdown fence. Extract
+  // the first balanced object without trying to invent any missing content.
+  let start = -1;
+  let depth = 0;
+  let quoted = false;
+  let escaped = false;
+  for (let index = 0; index < input.length; index++) {
+    const char = input[index];
+    if (quoted) {
+      if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === '"') quoted = false;
+      continue;
     }
-    return parsed;
-  } catch {
-    return null;
+    if (char === '"') {
+      quoted = true;
+      continue;
+    }
+    if (char === '{') {
+      if (depth === 0) start = index;
+      depth++;
+    } else if (char === '}' && depth > 0) {
+      depth--;
+      if (depth === 0 && start >= 0) {
+        candidates.add(input.slice(start, index + 1));
+        break;
+      }
+    }
   }
+
+  for (const candidate of candidates) {
+    // A trailing comma is a common serialization blemish and can be removed
+    // deterministically. Truncated JSON is deliberately not repaired.
+    const variants = [candidate, removeJsonTrailingCommas(candidate)];
+    for (const variant of variants) {
+      try {
+        const parsed = JSON.parse(variant) as StructuredUnitPlan;
+        if (!isObject(parsed) || parsed.version !== 1
+          || !['ai-planner', 'deterministic-planner', 'hybrid-planner'].includes(String(parsed.source))
+          || !Array.isArray(parsed.targets)) continue;
+        return parsed;
+      } catch {
+        // Try the next lossless/tolerant representation.
+      }
+    }
+  }
+  return null;
 }
 
 /**
@@ -130,7 +198,7 @@ export function anchorStructuredUnitPlan(
   return {
     ...plan,
     version: 1,
-    source: 'ai-planner',
+    source: plan.source || 'ai-planner',
     project: {
       name: context.project.projectName,
       root: context.project.projectRoot,

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   anchorStructuredUnitPlan,
+  parseStructuredUnitPlan,
   salvageStructuredUnitPlan,
   validateStructuredUnitPlan,
 } from '../../src/core/unit/plan-validator.js';
@@ -70,6 +71,15 @@ function validPlan(): StructuredUnitPlan {
 }
 
 describe('Structured Unit Plan validator', () => {
+  it('extracts valid JSON from provider prose/fences and removes only trailing commas', () => {
+    const raw = `Planner result:\n\`\`\`json\n${JSON.stringify(validPlan(), null, 2).replace(/\n}/g, ',\n}')}\n\`\`\``;
+    expect(parseStructuredUnitPlan(raw)?.targets[0].symbol).toBe('applyDiscount');
+  });
+
+  it('does not invent missing content for truncated JSON', () => {
+    expect(parseStructuredUnitPlan('{"version":1,"source":"ai-planner","targets":[')).toBeNull();
+  });
+
   it('accepts a plan grounded in source hash, branch map, and dependency map', () => {
     expect(validateStructuredUnitPlan(validPlan(), context())).toEqual([]);
   });

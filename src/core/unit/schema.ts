@@ -322,7 +322,7 @@ export interface UnitPlanTarget {
 
 export interface StructuredUnitPlan {
   version: 1;
-  source: 'ai-planner';
+  source: 'ai-planner' | 'deterministic-planner' | 'hybrid-planner';
   project: {
     name: string;
     root: string;

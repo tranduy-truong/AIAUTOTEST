@@ -22,6 +22,15 @@ import type {
   UnitTarget,
   UnitTestCaseGenerationResult,
 } from '../../core/unit/schema.js';
+import {
+  artifact,
+  detail,
+  error as uiError,
+  progress,
+  success,
+  summary,
+  warning,
+} from '../../core/cli-ui.js';
 
 function profileCapability(target: UnitTarget): { supported: boolean; reason?: string } {
   if (['UNIT_NATIVE', 'UNIT_MOCKED', 'PROCESS_SANDBOX'].includes(target.profile)) return { supported: true };
@@ -464,8 +473,8 @@ export async function runUnitGenerator(options: {
   const session = loadUnitSession();
   const context = loadUnitContext(session);
   if (context.project.testFramework === 'unknown') {
-    console.error('❌ Dự án chưa có Vitest/Jest. Generator dừng để không tạo test không chạy được.');
-    console.error('   Hãy cấu hình test runner trong dự án đích rồi quét lại.');
+    uiError('Dự án chưa có Vitest/Jest nên chưa thể sinh test chạy được.');
+    detail('Hành động', 'Cấu hình test runner trong dự án đích rồi quét lại.');
     return false;
   }
   const framework = context.project.testFramework;
@@ -477,7 +486,10 @@ export async function runUnitGenerator(options: {
   const results: UnitGenerationTargetResult[] = [];
   const oracleResults: Array<{ target: string; testCases: UnitOracleResolution[] }> = [];
   const allowedTargets = options.onlyTargetIds ? new Set(options.onlyTargetIds) : undefined;
-  for (const planTarget of plan.targets.filter(item => !allowedTargets || allowedTargets.has(`${item.sourceFile}#${item.symbol}`))) {
+  const selectedPlanTargets = plan.targets.filter(
+    item => !allowedTargets || allowedTargets.has(`${item.sourceFile}#${item.symbol}`),
+  );
+  for (const [targetIndex, planTarget] of selectedPlanTargets.entries()) {
     const target = context.targets.find(
       item => item.sourceFile === planTarget.sourceFile && item.symbol === planTarget.symbol,
     );
@@ -537,7 +549,11 @@ export async function runUnitGenerator(options: {
     oracleResults.push({ target: label, testCases: resolvedOracles });
     const verifiedPlanTarget = oraclePreparation.planTarget;
     const unresolvedCases = oraclePreparation.unresolvedCases;
-    console.log(`   Biên dịch deterministic ${label} [${target.profile}]...`);
+    progress(
+      targetIndex + 1,
+      selectedPlanTargets.length,
+      `${planTarget.sourceFile} › ${planTarget.symbol} [${target.profile}]`,
+    );
     const compiled = compileUnitTestFile({
       target,
       planTarget: verifiedPlanTarget,
@@ -620,7 +636,7 @@ export async function runUnitGenerator(options: {
       errors: skippedCases.flatMap(testCase => testCase.errors),
       testCases: allTestCaseResults,
     });
-    console.log(`   ✅ Đã tạo: ${testPath}`);
+    success(`Đã tạo ${path.basename(testPath)}`);
   }
 
   // A run must be reproducible from its own generation manifest. Replacing
@@ -654,7 +670,7 @@ export async function runUnitGenerator(options: {
         proposedExpected: plannedCase?.expected,
         proposedOracleSource: plannedCase?.oracleSource,
         reasons: testCase.errors,
-        nextAction: 'Bổ sung expected nghiệp vụ vào ô yêu cầu và để Planner trích nguyên văn vào oracleEvidence.reference; hoặc refactor target thành pure function để static evaluator chứng minh.',
+        nextAction: 'Chạy lại target và nhập kết quả mong đợi ở ô "Yêu cầu nghiệp vụ/expected bổ sung".',
       };
     }));
   fs.writeFileSync(path.join(session.runDirectory, 'oracle-requests.json'), `${JSON.stringify({
@@ -666,17 +682,44 @@ export async function runUnitGenerator(options: {
   updateUntestableTargets(session.runDirectory, results);
   const notGenerated = results.filter(result => !result.file);
   const partialTargets = results.filter(result => result.status === 'PARTIAL');
+  const testCaseResults = results.flatMap(result => result.testCases || []);
+  const generatedCases = testCaseResults.filter(testCase => testCase.status === 'GENERATED').length;
+  const targetReadyCount = results.length - notGenerated.length;
+  const resultTone = generatedFiles.length === results.length && oracleRequests.length === 0
+    ? 'success'
+    : oracleRequests.length > 0 || generatedFiles.length > 0
+      ? 'warning'
+      : 'error';
+  summary('Kết quả sinh Unit Test', [
+    ['Target sẵn sàng', `${targetReadyCount}/${results.length}`],
+    ['File test đã tạo', String(generatedFiles.length)],
+    ['Test case sẵn sàng', `${generatedCases}/${testCaseResults.length}`],
+    ['Cần xác nhận expected', String(oracleRequests.length)],
+  ], resultTone);
+
   if (oracleRequests.length > 0) {
-    console.warn(`⚠️ ${oracleRequests.length} test case cần expected có bằng chứng; batch không bị dừng. Chi tiết: ${path.join(session.runDirectory, 'oracle-requests.json')}`);
+    warning(`${oracleRequests.length} test case chưa có kết quả mong đợi đủ tin cậy.`);
+    detail('Làm tiếp', 'Chạy lại target và nhập expected nghiệp vụ ở câu hỏi bổ sung.');
+    artifact('Danh sách cần nhập', 'oracle-requests.json');
   }
   if (partialTargets.length > 0) {
-    console.warn(`⚠️ ${partialTargets.length} target được sinh một phần; xem trạng thái từng test case trong generation-manifest.json.`);
+    warning(`${partialTargets.length} target mới sinh được một phần.`);
   }
-  if (notGenerated.length > 0) {
-    console.warn(`⚠️ ${notGenerated.length}/${results.length} target chưa sinh được; batch vẫn tiếp tục. Chi tiết: ${path.join(session.runDirectory, 'generation-manifest.json')}`);
+  const blockedWithoutOracle = notGenerated.length - results.filter(
+    result => !result.file && result.status === 'NEEDS_ORACLE',
+  ).length;
+  if (blockedWithoutOracle > 0) {
+    uiError(`${blockedWithoutOracle} target gặp lỗi kỹ thuật và chưa tạo được file test.`);
+    artifact('Chi tiết kỹ thuật', 'generation-manifest.json');
+  } else if (notGenerated.length > 0 && oracleRequests.length === 0) {
+    warning(`${notGenerated.length} target chưa tạo được file test.`);
+    artifact('Chi tiết kỹ thuật', 'generation-manifest.json');
   }
   if (generatedFiles.length > 0) {
-    console.log(`✅ Đã sinh ${generatedFiles.length} file Unit Test import source thật tại: ${outputDirectory}`);
+    success(`Hoàn tất ${generatedFiles.length} file Unit Test.`);
+    artifact('Thư mục kết quả', outputDirectory);
+  } else if (oracleRequests.length > 0) {
+    warning('Chưa tạo file test vì toàn bộ test case đang chờ xác nhận expected.');
   }
   return generatedFiles.length > 0;
 }

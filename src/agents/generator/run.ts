@@ -4,6 +4,7 @@ import { fileURLToPath } from "url";
 import { OpenAIAdapter } from "../../adapters/openai.js";
 import type { ActionPlan, ResolvedAction } from "../../core/action-plan.js";
 import { runUnitGenerator } from './unit-generator.js';
+import { section } from '../../core/cli-ui.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const MAX_DOM_REPORT_CHARS = 8000;
@@ -200,13 +201,14 @@ export async function runGenerator(
   level: "unit" | "integration" | "e2e",
   targetFileName: string,
 ) {
+  if (level === 'unit') {
+    section('02', 'Generator', 'Biên dịch Test Intent thành Vitest theo quy tắc xác định');
+    return runUnitGenerator();
+  }
+
   console.log(
     `\n👨‍💻 [Generator Agent] Đang sinh code kiểm thử cho tầng: ${level.toUpperCase()}`,
   );
-
-  if (level === 'unit') {
-    return runUnitGenerator();
-  }
 
   // 1. Kiểm tra kế hoạch từ file JSON
   const preferredPlanPath = level === 'e2e'

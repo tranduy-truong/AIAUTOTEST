@@ -13,45 +13,54 @@ import { buildCompactDomReport, runLive } from "./agents/crawler/live-runner.js"
 import { analyzeUnitInput, createUnitSession } from "./core/unit/artifacts.js";
 import { runLastGeneratedUnitTests } from "./core/unit/runner.js";
 import { runUnitCoverageGuidedLoop } from "./agents/planner/unit-coverage-loop.js";
+import {
+  artifact,
+  detail,
+  error as uiError,
+  header,
+  menuChoice,
+  paint,
+  profile,
+  section,
+  success,
+  summary,
+  warning,
+} from "./core/cli-ui.js";
 
 const harness = new TestPolicyHarness();
 
 // 1. MENU CHÍNH CỦA ỨNG DỤNG
 async function mainMenu() {
   console.clear();
-  console.log(`
-======================================================
-AI TESTING TOOLKIT - 3 TẦNG KIỂM THỬ THÔNG MINH
-======================================================
-  `);
+  header();
 
   const { action } = await inquirer.prompt([
     {
       type: "list",
       name: "action",
-      message: "Mời bạn chọn tính năng:",
+      message: "Chọn chức năng",
       choices: [
         {
-          name: "1. AI Lên kế hoạch & Sinh Code Test (Planner -> Generator)",
+          name: menuChoice("01", "Lên kế hoạch & sinh test", "Planner → Generator"),
           value: "plan_and_generate",
         },
         {
-          name: "2. Chạy kiểm thử E2E (Playwright - Giao diện)",
+          name: menuChoice("02", "Chạy E2E", "Playwright • giao diện"),
           value: "run_e2e",
         },
         {
-          name: "3. Chạy kiểm thử Integration (Tích hợp API/DB)",
+          name: menuChoice("03", "Chạy Integration", "API • database"),
           value: "run_integration",
         },
         {
-          name: "4. Chạy kiểm thử Unit Test (Vitest - Logic nội bộ)",
+          name: menuChoice("04", "Chạy Unit Test", "Vitest • logic nội bộ"),
           value: "run_unit",
         },
         {
-          name: "5. Xem báo cáo kiểm thử gần nhất",
+          name: menuChoice("05", "Xem báo cáo", "Kết quả gần nhất"),
           value: "view_report",
         },
-        { name: "6. Thoát ứng dụng", value: "exit" },
+        { name: menuChoice("06", "Thoát", "Đóng ứng dụng"), value: "exit" },
       ],
     },
   ]);
@@ -212,14 +221,7 @@ Vi du:
     ]);
     contextData = apiDesc;
   } else if (level === "unit") {
-    console.log(`
------------------------------------------------------------------
-UNIT TEST WHITEBOX
-
-Planner se doc AST, xac dinh branch/dependency va lap Test Plan.
-Generator chi duoc import source that; khong copy ham vao file test.
------------------------------------------------------------------
-    `);
+    section("UNIT", "Kiểm thử Whitebox", "Đọc source thật • phân tích AST • sinh Vitest có kiểm chứng");
     const { inputMode } = await inquirer.prompt([
       {
         type: "list",
@@ -263,21 +265,26 @@ Generator chi duoc import source that; khong copy ham vao file test.
     try {
       analysis = analyzeUnitInput(unitInputPath);
     } catch (error) {
-      console.error(`❌ Code Reader không thể phân tích: ${error.message}`);
+      uiError(`Code Reader không thể phân tích: ${error.message}`);
       await returnToMenu();
       return;
     }
     const eligibleTargets = analysis.index.targets.filter(target => target.executionMode !== "UNSUPPORTED");
     if (eligibleTargets.length === 0) {
-      console.error("❌ Không tìm thấy hàm/class được export để sinh Unit Test.");
-      console.error("   Target phải dùng export để test có thể import source thật.");
+      uiError("Không tìm thấy hàm/class được export để sinh Unit Test.");
+      detail("Yêu cầu", "Target phải được export để file test import source thật.");
       await returnToMenu();
       return;
     }
-    console.log(`   Code Reader: ${analysis.manifest.sourceFiles.length} file, ${analysis.index.targets.length} target, ${eligibleTargets.length} target có thể test.`);
-    console.log(`   Framework phát hiện: ${analysis.manifest.testFramework}`);
+    summary("Kết quả quét mã nguồn", [
+      ["Dự án", analysis.manifest.projectName],
+      ["File nguồn", String(analysis.manifest.sourceFiles.length)],
+      ["Target", `${eligibleTargets.length}/${analysis.index.targets.length} có thể test`],
+      ["Framework", analysis.manifest.testFramework],
+    ]);
     if (analysis.manifest.testFramework === "unknown") {
-      console.error("❌ Dự án chưa cấu hình Vitest hoặc Jest. Hệ thống không tự đoán/cài framework.");
+      uiError("Dự án chưa cấu hình Vitest hoặc Jest.");
+      detail("Hành động", "Cấu hình test runner trong dự án đích rồi quét lại.");
       await returnToMenu();
       return;
     }
@@ -303,7 +310,7 @@ Generator chi duoc import source that; khong copy ham vao file test.
             message: "Chọn target cần sinh test:",
             pageSize: 20,
             choices: eligibleTargets.map(target => ({
-              name: `${target.sourceFile} → ${target.symbol} [${target.profile}]`,
+              name: `${target.sourceFile}  ›  ${target.symbol} ${profile(target.profile)}`,
               value: target.id,
             })),
             validate: value => value.length > 0 ? true : "Phải chọn ít nhất một target.",
@@ -322,9 +329,10 @@ Generator chi duoc import source that; khong copy ham vao file test.
     try {
       const prepared = createUnitSession(analysis, selectedTargetIds, requirements);
       contextData = JSON.stringify(prepared.context);
-      console.log(`   Đã tạo Unit Context: ${prepared.session.contextPath}`);
+      success("Đã chuẩn bị dữ liệu cho Planner.");
+      artifact("Phiên chạy", path.basename(prepared.session.runDirectory));
     } catch (error) {
-      console.error(`❌ Không tạo được Unit Context: ${error.message}`);
+      uiError(`Không tạo được Unit Context: ${error.message}`);
       await returnToMenu();
       return;
     }
@@ -338,7 +346,7 @@ Generator chi duoc import source that; khong copy ham vao file test.
       {
         type: "confirm",
         name: "confirmGen",
-        message: `Đã có Test Plan (${level}). Kích hoạt Generator sinh code luôn không?`,
+        message: "Kế hoạch đã sẵn sàng. Sinh file test ngay?",
         default: true,
       },
     ]);
@@ -384,38 +392,37 @@ Generator chi duoc import source that; khong copy ham vao file test.
 
 // 3. TÍNH NĂNG: CHẠY TEST VÀ KÍCH HOẠT CHÍNH SÁCH BẮT LỖI
 async function runTests(level) {
-  console.log(
-    `\nĐang khởi chạy bộ kiểm thử cấp độ [${level.toUpperCase()}]...`,
-  );
+  section("RUN", `Chạy ${level.toUpperCase()}`, "Thực thi test và tổng hợp kết quả");
 
   if (level === "unit") {
     let unitResult;
     try {
       unitResult = runLastGeneratedUnitTests();
     } catch (error) {
-      console.error(`❌ Không thể chạy Unit Test gần nhất: ${error.message}`);
+      uiError(`Không thể chạy Unit Test gần nhất: ${error.message}`);
       await returnToMenu();
       return;
     }
-    console.log(`   Dự án đích: ${unitResult.cwd}`);
-    console.log(`   Lệnh: ${unitResult.command.join(" ") || "không có"}`);
+    detail("Dự án", path.basename(unitResult.cwd));
+    detail("Lệnh", unitResult.command.join(" ") || "không có");
     if (unitResult.stdout) console.log(unitResult.stdout);
     if (unitResult.stderr) console.error(unitResult.stderr);
     if (unitResult.ok) {
-      console.log("\nTất cả Unit Test đã pass thành công!");
-      console.log(unitResult.coverageEnabled
-        ? "Coverage đã được bật và lưu trong dự án đích."
-        : "Test pass nhưng chưa đo coverage vì dự án đích chưa có coverage provider.");
+      success("Tất cả Unit Test đã pass.");
+      unitResult.coverageEnabled
+        ? success("Coverage đã được ghi nhận.")
+        : warning("Test đã pass nhưng dự án chưa có coverage provider.");
       const coverageLoop = await runUnitCoverageGuidedLoop(unitResult);
       unitResult = coverageLoop.finalRun;
       if (coverageLoop.status === "TARGET_REACHED") {
-        console.log("Coverage đã đạt ngưỡng 80% cho các target được đo.");
+        success("Coverage đã đạt ngưỡng 80% cho các target được đo.");
       } else if (coverageLoop.rounds.length > 0) {
-        console.log(`Coverage loop kết thúc với trạng thái ${coverageLoop.status} sau ${coverageLoop.rounds.length} vòng.`);
+        warning(`Coverage kết thúc ở trạng thái ${coverageLoop.status} sau ${coverageLoop.rounds.length} vòng.`);
       }
     } else {
       const errorMessage = `${unitResult.stdout}\n${unitResult.stderr}`.trim();
-      console.log("\nUnit Test failed. Healer chỉ chẩn đoán, không tự đổi Expected Result.");
+      uiError("Unit Test chưa pass.");
+      detail("Healer", "Chỉ chẩn đoán; không tự đổi expected result.");
       await runHealer("unit", errorMessage);
       const result = await harness.handleTestFailure("unit", "Generated Unit Suite", errorMessage);
       fs.mkdirSync("artifacts", { recursive: true });
@@ -434,12 +441,10 @@ async function runTests(level) {
   try {
     const output = execSync(command, { encoding: "utf-8" });
     console.log(output);
-    console.log(
-      `\nTất cả kịch bản test [${level.toUpperCase()}] đã pass thành công!`,
-    );
+    success(`Tất cả test ${level.toUpperCase()} đã pass.`);
   } catch (error) {
-    console.log("\nPhát hiện lỗi trong quá trình run test!");
-    console.log("Kích hoạt AI Diagnostics & Policy Harness...");
+    uiError(`Test ${level.toUpperCase()} chưa pass.`);
+    detail("Tiếp theo", "Đang chạy chẩn đoán và tạo báo cáo.");
 
     const errorMessage = error.stdout || error.message;
     await runHealer(level, String(errorMessage));
@@ -474,9 +479,8 @@ ${result.report}
     `;
 
     fs.writeFileSync("artifacts/report.md", reportContent);
-    console.log(
-      "\nĐã xuất báo cáo chi tiết nguyên nhân vào file: artifacts/report.md",
-    );
+    success("Đã tạo báo cáo chẩn đoán.");
+    artifact("Báo cáo", "artifacts/report.md");
   }
 
   await returnToMenu();
@@ -490,9 +494,7 @@ function showReport() {
     console.log(content);
     console.log("------------------------------------------------------\n");
   } else {
-    console.log(
-      "\nChưa có báo cáo nào được ghi nhận trong thư mục artifacts/\n",
-    );
+    warning("Chưa có báo cáo kiểm thử nào.");
   }
   returnToMenu();
 }
@@ -503,7 +505,7 @@ async function returnToMenu() {
     {
       type: "input",
       name: "continue",
-      message: "\nNhấn [ENTER] để quay lại Menu chính...",
+      message: paint.muted("Nhấn Enter để quay lại menu chính"),
     },
   ]);
   await mainMenu();

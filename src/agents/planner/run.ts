@@ -26,6 +26,16 @@ import {
   resolveDeterministicUnitPlan,
   resolveUnitPlannerProposal,
 } from '../../core/unit/planner-fallback.js';
+import {
+  artifact,
+  detail,
+  error as uiError,
+  progress,
+  section,
+  success,
+  summary,
+  warning,
+} from '../../core/cli-ui.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const E2E_JSON_PATH = 'artifacts/test-plan-e2e.json';
@@ -347,7 +357,6 @@ async function planOneUnitTarget(
   // AI interpretation. With no requirements, the AST contract is the more
   // reliable and cheaper source of truth.
   if (deterministic.plan && !aiContext.requirements?.trim()) {
-    console.log(`   Deterministic Planner: AST contract đầy đủ cho target ${index}; bỏ qua AI call.`);
     return { ...deterministic, rawOutput: '' };
   }
 
@@ -357,10 +366,7 @@ async function planOneUnitTarget(
   const result = await callPlannerAdapter(task, `_unit_${index}`);
   const resolved = resolveUnitPlannerProposal(result.rawOutput, aiContext, !result.ok);
   if (resolved.mode === 'deterministic-fallback' && resolved.plan) {
-    console.warn(
-      `   ⚠️ AI Planner không dùng được cho target ${index}; `
-      + 'đã chuyển sang Deterministic Planner và tiếp tục pipeline.',
-    );
+    warning(`Target ${index}: AI không dùng được; đã chuyển sang phân tích AST.`);
   }
   return { ...resolved, rawOutput: result.rawOutput };
 }
@@ -377,7 +383,7 @@ async function runStructuredUnitPlanner(
       throw new Error('Context thiếu project hoặc target.');
     }
   } catch (error) {
-    console.error(`❌ Unit Context không hợp lệ: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    uiError(`Unit Context không hợp lệ: ${error instanceof Error ? error.message : 'Unknown error'}`);
     return false;
   }
 
@@ -394,7 +400,11 @@ async function runStructuredUnitPlanner(
   const plannerModes: Array<'ai' | 'salvaged-ai' | 'deterministic' | 'deterministic-fallback'> = [];
   for (let index = 0; index < context.targets.length; index++) {
     const singleContext: UnitContextBundle = { ...context, targets: [context.targets[index]] };
-    console.log(`   Phân tích ${index + 1}/${context.targets.length}: ${context.targets[index].sourceFile}#${context.targets[index].symbol}`);
+    progress(
+      index + 1,
+      context.targets.length,
+      `${context.targets[index].sourceFile} › ${context.targets[index].symbol}`,
+    );
     const result = await planOneUnitTarget(systemPrompt, singleContext, index + 1);
     rawOutputs.push(result.rawOutput);
     skippedTestCaseIssues.push(...result.skippedIssues);
@@ -419,7 +429,7 @@ async function runStructuredUnitPlanner(
       path.join(loadUnitSession().runDirectory, 'planner-skipped-test-cases.json'),
       `${JSON.stringify(skippedTestCaseIssues, null, 2)}\n`,
     );
-    console.warn(`⚠️ Planner đã cách ly ${new Set(skippedTestCaseIssues.flatMap(issue => issue.testCaseId ? [issue.testCaseId] : [])).size} test case không an toàn; target hợp lệ vẫn tiếp tục.`);
+    warning(`${new Set(skippedTestCaseIssues.flatMap(issue => issue.testCaseId ? [issue.testCaseId] : [])).size} test case chưa an toàn đã được bỏ qua.`);
   }
 
   const session = loadUnitSession();
@@ -439,18 +449,15 @@ async function runStructuredUnitPlanner(
       `${rawOutputs.join('\n\n--- TARGET OUTPUT ---\n\n')}\n`,
     );
     if (plannedTargets.length === 0) {
-      console.error(`❌ Không target nào đạt hợp đồng Planner Unit (${allIssues.length} lỗi). Generator đã được chặn.`);
+      uiError(`Planner chưa tạo được kế hoạch an toàn cho ${context.targets.length} target.`);
       for (const issue of allIssues.slice(0, 8)) {
-        console.error(`   - [${issue.code}] ${issue.testCaseId ? `${issue.testCaseId}: ` : ''}${issue.message}`);
+        detail(issue.code, `${issue.testCaseId ? `${issue.testCaseId}: ` : ''}${issue.message}`);
       }
-      console.error(`   Chi tiết: ${path.join(session.runDirectory, 'planner-validation-errors.json')}`);
+      artifact('Chi tiết kỹ thuật', 'planner-validation-errors.json');
       return false;
     }
-    console.warn(
-      `⚠️ ${plannedTargets.length}/${context.targets.length} target đạt hợp đồng; ` +
-      `${context.targets.length - plannedTargets.length} target được cách ly, không chặn các target hợp lệ.`,
-    );
-    console.warn(`   Chi tiết target chưa hợp lệ: ${path.join(session.runDirectory, 'planner-validation-errors.json')}`);
+    warning(`${context.targets.length - plannedTargets.length} target chưa an toàn đã được bỏ qua; các target còn lại vẫn tiếp tục.`);
+    artifact('Chi tiết kỹ thuật', 'planner-validation-errors.json');
   }
 
   const plan: StructuredUnitPlan = {
@@ -481,7 +488,7 @@ async function runStructuredUnitPlanner(
       path.join(session.runDirectory, 'planner-validation-errors.json'),
       `${JSON.stringify(finalBlockingIssues, null, 2)}\n`,
     );
-    console.error(`❌ Unit Plan hợp nhất không hợp lệ (${finalBlockingIssues.length} lỗi).`);
+    uiError(`Unit Plan hợp nhất không hợp lệ (${finalBlockingIssues.length} lỗi).`);
     return false;
   }
 
@@ -489,7 +496,16 @@ async function runStructuredUnitPlanner(
   const markdown = renderUnitPlanMarkdown(plan);
   fs.writeFileSync(path.join(session.runDirectory, 'test-plan-unit.md'), markdown);
   fs.writeFileSync('artifacts/test-plan-unit.md', markdown);
-  console.log(`✅ Đã lập xong Unit Plan! Lưu tại: ${session.planPath}`);
+  const deterministicCount = plannerModes.filter(mode =>
+    mode === 'deterministic' || mode === 'deterministic-fallback'
+  ).length;
+  summary('Planner hoàn tất', [
+    ['Target sẵn sàng', `${plannedTargets.length}/${context.targets.length}`],
+    ['Phân tích AST', `${deterministicCount}/${plannerModes.length}`],
+    ['Dùng AI', `${plannerModes.length - deterministicCount}/${plannerModes.length}`],
+    ['Kế hoạch', 'test-plan-unit.json'],
+  ], plannedTargets.length === context.targets.length ? 'success' : 'warning');
+  success('Kế hoạch Unit Test đã sẵn sàng.');
   return true;
 }
 
@@ -497,7 +513,11 @@ export async function runPlanner(
   level: 'unit' | 'integration' | 'e2e',
   contextData: string,
 ): Promise<boolean> {
-  console.log(`\n🧠 [Planner Agent] Đang phân tích yêu cầu cho tầng: ${level.toUpperCase()}`);
+  if (level === 'unit') {
+    section('01', 'Planner', 'Phân tích AST và lập Test Intent');
+  } else {
+    console.log(`\n🧠 [Planner Agent] Đang phân tích yêu cầu cho tầng: ${level.toUpperCase()}`);
+  }
 
   const promptFilePath = path.join(__dirname, `prompt-${level}.md`);
   if (!fs.existsSync(promptFilePath)) {

@@ -116,3 +116,40 @@ export function profile(value: string): string {
   return paint.muted(`[${value}]`);
 }
 
+export function oracleSummary(counts: {
+  specRequirement: number;
+  specTesterConfirmed: number;
+  characterization: number;
+  sourceConflict: number;
+  needsOracle: number;
+}): void {
+  summary('ORACLE VALIDATION SUMMARY', [
+    ['Specification (Requirement)', paint.success(`${counts.specRequirement} test cases`)],
+    ['Specification (Tester Approved)', paint.success(`${counts.specTesterConfirmed} test cases`)],
+    ['Characterization (Source Derived)', paint.warning(`${counts.characterization} test cases`)],
+    ['Conflict with Specification', paint.error(`${counts.sourceConflict} test cases`)],
+    ['Needs Oracle / Invalid', paint.error(`${counts.needsOracle} test cases`)],
+  ], counts.sourceConflict > 0 || counts.needsOracle > 0 ? 'error' : 'info');
+}
+
+export function testExecutionSummary(execution: {
+  specPassed: number;
+  specTotal: number;
+  charPassed: number;
+  charTotal: number;
+  conflicts: number;
+  needsOracle: number;
+}): void {
+  console.log(`\n${paint.bold('📊 TỔNG HỢP KẾT QUẢ THỰC THI (ORACLE TAXONOMY):')}`);
+  console.log(`  ${paint.success('✔')} ${paint.bold('Specification Tests:')}      ${execution.specPassed}/${execution.specTotal} passed`);
+  if (execution.charTotal > 0) {
+    console.log(`  ${paint.warning('⚠')} ${paint.bold('Characterization Tests:')}   ${execution.charPassed}/${execution.charTotal} passed ${paint.muted('(⚠ Chỉ xác nhận code không bị trôi hành vi)')}`);
+  }
+  if (execution.conflicts > 0) {
+    console.log(`  ${paint.error('✖')} ${paint.bold('Source Conflicts:')}          ${execution.conflicts} ${paint.error('(Cần sửa bug trong source code)')}`);
+  }
+  if (execution.needsOracle > 0) {
+    console.log(`  ${paint.error('?')} ${paint.bold('Needs Oracle:')}              ${execution.needsOracle} ${paint.error('(Thiếu expected result)')}`);
+  }
+}
+

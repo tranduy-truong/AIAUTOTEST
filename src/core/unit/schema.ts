@@ -300,6 +300,8 @@ export interface UnitMockPlan {
   behavior: UnitMockBehavior;
 }
 
+import type { ComprehensiveOracle, OracleGateResult } from './oracle/oracle-taxonomy.js';
+
 export interface UnitPlannedTestCase {
   id: string;
   name: string;
@@ -307,8 +309,14 @@ export interface UnitPlannedTestCase {
   inputs: Record<string, UnitDataValue>;
   constructorInputs?: Record<string, UnitDataValue>;
   expected: UnitExpectedResult;
-  oracleSource: UnitOracleSource;
+  /** @deprecated Kept for v1 migration compatibility. Use oracle.authority instead. */
+  oracleSource?: UnitOracleSource;
+  /** @deprecated Kept for v1 migration compatibility. Use oracle.evidence instead. */
   oracleEvidence?: UnitOracleEvidence;
+  /** Taxonomy v2 3-Dimension Oracle */
+  oracle?: ComprehensiveOracle;
+  /** Oracle Gate result status */
+  gate?: OracleGateResult;
   mocks: UnitMockPlan[];
   notes?: string[];
 }
@@ -323,7 +331,7 @@ export interface UnitPlanTarget {
 }
 
 export interface StructuredUnitPlan {
-  version: 1;
+  version: 1 | 2;
   source: 'ai-planner' | 'deterministic-planner' | 'hybrid-planner';
   project: {
     name: string;

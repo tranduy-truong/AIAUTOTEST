@@ -730,6 +730,9 @@ function showReport() {
 
 // HÀM PHỤ TỰ QUAY LẠI MENU
 async function returnToMenu() {
+  if (process.argv.includes("--non-interactive")) {
+    return;
+  }
   await inquirer.prompt([
     {
       type: "input",
@@ -740,5 +743,54 @@ async function returnToMenu() {
   await mainMenu();
 }
 
-// KHỞI CHẠY MENU
-mainMenu();
+// XỬ LÝ KHỞI CHẠY CLI: INTERACTIVE NẾU KHÔNG CÓ CỜ, NON-INTERACTIVE NẾU CÓ CỜ
+async function runCliEntrypoint() {
+  const args = process.argv.slice(2);
+  const isNonInteractive = args.includes("--non-interactive");
+
+  let level = null;
+  const levelIdx = args.indexOf("--level");
+  if (levelIdx !== -1 && args[levelIdx + 1]) {
+    level = args[levelIdx + 1];
+  }
+
+  if (isNonInteractive || level) {
+    header();
+    const targetLevel = level || "unit";
+    section("CLI", `CHẠY NON-INTERACTIVE PIPELINE [${targetLevel.toUpperCase()}]`, "Thực thi CI/CD tự động");
+
+    try {
+      if (targetLevel === "unit") {
+        const unitResult = runLastGeneratedUnitTests();
+        const runSummary = summarizeUnitRunOutput(unitResult.stdout, unitResult.stderr);
+
+        if (!unitResult.ok || runSummary.failedTests > 0) {
+          uiError(`Pipeline CI thất bại: Có ${runSummary.failedTests} test case bị lỗi.`);
+          process.exit(1);
+        } else {
+          success("Tất cả Unit Test đã pass thành công trong CI.");
+          process.exit(0);
+        }
+      } else if (targetLevel === "integration") {
+        execSync("npx vitest run tests/integration", { stdio: "inherit" });
+        success("Integration Test pass.");
+        process.exit(0);
+      } else if (targetLevel === "e2e") {
+        execSync("npx playwright test tests/e2e", { stdio: "inherit" });
+        success("E2E Test pass.");
+        process.exit(0);
+      } else {
+        uiError(`Tầng kiểm thử không hợp lệ: ${targetLevel}`);
+        process.exit(2);
+      }
+    } catch (err) {
+      uiError(`Pipeline thất bại với lỗi: ${err.message}`);
+      process.exit(1);
+    }
+  } else {
+    mainMenu();
+  }
+}
+
+// KHỞI CHẠY CLI
+runCliEntrypoint();

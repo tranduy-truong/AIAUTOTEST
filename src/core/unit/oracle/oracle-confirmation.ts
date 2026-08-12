@@ -8,6 +8,11 @@ import type {
   UnitSession,
 } from '../schema.js';
 import { validateExpectedIntent } from '../test-intent.schema.js';
+import {
+  promoteToSpecificationByTester,
+  replaceExpectedByTester,
+} from './oracle-taxonomy.js';
+import { migratePlanV1ToV2 } from '../plan-migrator.js';
 
 export interface UnitOracleRequest {
   target: string;
@@ -20,7 +25,7 @@ export interface UnitOracleRequest {
   nextAction?: string;
 }
 
-export type UnitOracleReviewStatus = 'CONFIRMED' | 'SKIPPED' | 'NEEDS_REVIEW';
+export type UnitOracleReviewStatus = 'CONFIRMED' | 'REPLACED' | 'SKIPPED' | 'NEEDS_REVIEW';
 
 export interface UnitOracleConfirmation {
   target: string;
@@ -29,6 +34,7 @@ export interface UnitOracleConfirmation {
   expected?: UnitExpectedResult;
   confirmedAt: string;
   note?: string;
+  actorType?: 'LOCAL_TESTER' | 'CI_USER';
 }
 
 export interface ApplyOracleConfirmationsResult {
@@ -44,7 +50,7 @@ interface OracleRequestArtifact {
 }
 
 interface OracleConfirmationArtifact {
-  version: 1;
+  version: 1 | 2;
   updatedAt: string;
   confirmations: UnitOracleConfirmation[];
 }
@@ -65,7 +71,8 @@ export function loadPendingUnitOracleRequests(session = loadUnitSession()): Unit
 }
 
 function loadUnitPlan(session: UnitSession): StructuredUnitPlan {
-  return JSON.parse(fs.readFileSync(session.planPath, 'utf-8')) as StructuredUnitPlan;
+  const raw = JSON.parse(fs.readFileSync(session.planPath, 'utf-8')) as StructuredUnitPlan;
+  return migratePlanV1ToV2(raw);
 }
 
 function loadPreviousConfirmations(session: UnitSession): UnitOracleConfirmation[] {
@@ -113,14 +120,40 @@ export function applyUnitOracleConfirmations(
     if (!planTarget || !testCase) {
       throw new Error(`${confirmation.testCaseId}: không còn tồn tại trong Unit Plan hiện tại.`);
     }
-    const reference = `CLI-${session.runId}-${confirmation.testCaseId}-${confirmation.confirmedAt}`;
+
+    const previousExpected = testCase.expected;
+    const actorType = confirmation.actorType || 'LOCAL_TESTER';
+    const note = confirmation.note?.trim() || 'Expected đã được xác nhận và nâng cấp thành Specification qua CLI.';
+
     testCase.expected = confirmation.expected;
     testCase.oracleSource = 'tester-confirmation';
     testCase.oracleEvidence = {
       status: 'verified',
       source: 'tester-confirmation',
-      reference,
+      reference: `CLI-${session.runId}-${confirmation.testCaseId}-${confirmation.confirmedAt}`,
     };
+
+    if (confirmation.status === 'REPLACED') {
+      testCase.oracle = replaceExpectedByTester(
+        testCase.oracle!,
+        previousExpected,
+        confirmation.expected,
+        actorType,
+        note,
+      );
+    } else {
+      testCase.oracle = promoteToSpecificationByTester(
+        testCase.oracle!,
+        actorType,
+        note,
+      );
+    }
+
+    testCase.gate = {
+      status: 'READY_SPECIFICATION',
+      specExpected: testCase.expected,
+    };
+
     if (confirmation.note?.trim()) {
       testCase.notes = [...(testCase.notes || []), `Tester: ${confirmation.note.trim()}`];
     }
@@ -133,7 +166,7 @@ export function applyUnitOracleConfirmations(
   const merged = new Map(loadPreviousConfirmations(session).map(item => [confirmationKey(item), item]));
   for (const confirmation of confirmations) merged.set(confirmationKey(confirmation), confirmation);
   const artifact: OracleConfirmationArtifact = {
-    version: 1,
+    version: 2,
     updatedAt: new Date().toISOString(),
     confirmations: [...merged.values()],
   };

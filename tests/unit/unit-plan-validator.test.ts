@@ -15,6 +15,13 @@ function target(): UnitTarget {
     parameters: [{ name: 'total', type: 'number', optional: false }], returnType: 'number',
     startLine: 1, endLine: 4, rawCode: 'export function applyDiscount(total: number) { return total; }',
     dependencies: [{ module: './db', importedNames: ['db'], external: false, boundary: 'database', strategy: 'mock', resolvedFile: 'src/db.ts' }],
+    supportingContext: {
+      callGraph: [], helperDefinitions: [], typeDefinitions: [], constantDefinitions: [],
+      reachableImports: [{
+        sourceFile: 'src/discount.ts', module: './db', importedNames: ['db'], resolvedFile: 'src/db.ts',
+      }],
+      unresolvedSymbols: [], truncated: false,
+    },
     branches: [
       { id: 'B001_TRUE', kind: 'if', condition: 'total <= 0', outcome: 'throw', line: 2 },
       { id: 'B001_FALSE', kind: 'if', condition: 'total <= 0', outcome: 'continue', line: 2 },
@@ -69,7 +76,7 @@ describe('Structured Unit Plan validator', () => {
       id: 'UT_DISCOUNT_000',
       name: 'initializes exported module metadata',
       branchIds: [],
-      inputs: {},
+      inputs: { total: 100 },
       expected: { kind: 'side-effect', calls: [] },
       oracleSource: 'type-contract',
       mocks: [{ module: './db', symbol: 'db', behavior: 'isolated during module setup' }],
@@ -121,5 +128,18 @@ describe('Structured Unit Plan validator', () => {
     plan.targets[0].testCases[0].expected = { kind: 'resolve', value: { total: 100 } };
     expect(validateStructuredUnitPlan(plan, ctx).map(issue => issue.code))
       .toContain('RETURN_TYPE_ORACLE_MISMATCH');
+  });
+
+  it('blocks missing, invented, and primitive-mismatched function inputs', () => {
+    const plan = validPlan();
+    plan.targets[0].testCases[0].inputs = { total: 'not-a-number', invented: true };
+    const codes = validateStructuredUnitPlan(plan, context()).map(issue => issue.code);
+
+    expect(codes).toContain('INPUT_TYPE_MISMATCH');
+    expect(codes).toContain('INVENTED_INPUT');
+
+    plan.targets[0].testCases[0].inputs = {};
+    expect(validateStructuredUnitPlan(plan, context()).map(issue => issue.code))
+      .toContain('MISSING_REQUIRED_INPUT');
   });
 });

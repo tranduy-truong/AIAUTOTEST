@@ -31,6 +31,7 @@ Tiếp nhận Target Contract và Unit Plan đã được Planner/Code Reader x�
 14. Factory mock phải tự chứa dữ liệu. Nếu cần biến dùng chung, Vitest dùng `vi.hoisted`; cấm tham chiếu biến top-level thường vì `vi.mock` bị hoist.
 15. Mock đủ mọi dependency `strategy=mock` theo đúng `testImportPath`. Cấm gọi browser, network, database hoặc filesystem thật.
 16. Chuyển `$type=map` thành `new Map(entries)` và `$type=set` thành `new Set(values)`; không đổi kiểu collection.
+17. Dùng `SUPPORTING CONTEXT REACHABLE` để dựng input đúng type và tính expected qua toàn bộ helper trong call graph. Cấm thay object bằng string, cấm đoán output khi helper/type đã có. Không được import hoặc gọi trực tiếp private helper; chỉ gọi target công khai.
 
 ## Định dạng đầu ra
 

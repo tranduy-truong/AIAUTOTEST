@@ -49,6 +49,38 @@ export interface UnitParameter {
   optional: boolean;
 }
 
+export interface UnitSupportingDefinition {
+  sourceFile: string;
+  sourceHash: string;
+  symbol: string;
+  kind: 'function' | 'class' | 'interface' | 'type' | 'enum' | 'constant';
+  code: string;
+}
+
+export interface UnitCallGraphEdge {
+  caller: string;
+  callee: string;
+  sourceFile: string;
+  resolution: 'same-file' | 'internal-import';
+}
+
+export interface UnitReachableImport {
+  sourceFile: string;
+  module: string;
+  importedNames: string[];
+  resolvedFile?: string;
+}
+
+export interface UnitSupportingContext {
+  callGraph: UnitCallGraphEdge[];
+  helperDefinitions: UnitSupportingDefinition[];
+  typeDefinitions: UnitSupportingDefinition[];
+  constantDefinitions: UnitSupportingDefinition[];
+  reachableImports: UnitReachableImport[];
+  unresolvedSymbols: string[];
+  truncated: boolean;
+}
+
 export interface UnitTarget {
   id: string;
   sourceFile: string;
@@ -64,6 +96,7 @@ export interface UnitTarget {
   endLine: number;
   rawCode: string;
   dependencies: UnitDependency[];
+  supportingContext: UnitSupportingContext;
   branches: UnitBranch[];
   executionMode: UnitExecutionMode;
   unsupportedReasons: string[];

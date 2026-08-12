@@ -118,6 +118,16 @@ export function createUnitSession(
   writeJson(path.join(runDirectory, 'code-index.json'), { ...analysis.index, targets: selected });
   writeJson(path.join(runDirectory, 'branch-map.json'), branchMap({ ...analysis.index, targets: selected }));
   writeJson(path.join(runDirectory, 'dependency-map.json'), dependencyMap({ ...analysis.index, targets: selected }));
+  writeJson(path.join(runDirectory, 'supporting-context.json'), {
+    version: 1,
+    targets: selected.map(target => ({
+      id: target.id,
+      sourceFile: target.sourceFile,
+      symbol: target.symbol,
+      sourceHash: target.sourceHash,
+      supportingContext: target.supportingContext,
+    })),
+  });
   writeJson(contextPath, context);
   writeJson(path.join(cwd, UNIT_CURRENT_SESSION_PATH), session);
   return { session, context };
@@ -153,6 +163,12 @@ export function saveUnitPlan(plan: StructuredUnitPlan, session = loadUnitSession
 }
 
 export function freshSourceHash(target: UnitTarget, projectRoot: string): string {
-  const source = fs.readFileSync(path.join(projectRoot, target.sourceFile), 'utf-8');
+  return freshUnitFileHash(target.sourceFile, projectRoot);
+}
+
+export function freshUnitFileHash(sourceFile: string, projectRoot: string): string {
+  const absolute = path.join(projectRoot, sourceFile);
+  if (!fs.existsSync(absolute)) return '';
+  const source = fs.readFileSync(absolute, 'utf-8');
   return crypto.createHash('sha256').update(source).digest('hex');
 }

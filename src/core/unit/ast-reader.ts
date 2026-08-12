@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import * as ts from 'typescript';
+import { buildSupportingContext } from './supporting-context.js';
 import type {
   UnitBranch,
   UnitCodeIndex,
@@ -11,6 +12,8 @@ import type {
   UnitProjectManifest,
   UnitTarget,
 } from './schema.js';
+
+const MAX_TARGET_CODE_CHARS = 24_000;
 
 function toPosix(value: string): string {
   return value.replace(/\\/g, '/');
@@ -55,10 +58,11 @@ function redactPotentialSecrets(rawCode: string): string {
 function resolveInternalModule(root: string, sourceFile: string, moduleName: string): string | undefined {
   if (!moduleName.startsWith('.')) return undefined;
   const base = path.resolve(root, path.dirname(sourceFile), moduleName);
+  const sourceBase = /\.(?:mjs|cjs|js)$/i.test(base) ? base.replace(/\.(?:mjs|cjs|js)$/i, '') : base;
   const candidates = [
     base,
-    ...['.ts', '.tsx', '.js', '.jsx', '.mts', '.cts', '.mjs', '.cjs'].map(ext => `${base}${ext}`),
-    ...['.ts', '.tsx', '.js', '.jsx'].map(ext => path.join(base, `index${ext}`)),
+    ...['.ts', '.tsx', '.js', '.jsx', '.mts', '.cts', '.mjs', '.cjs'].map(ext => `${sourceBase}${ext}`),
+    ...['.ts', '.tsx', '.js', '.jsx'].map(ext => path.join(sourceBase, `index${ext}`)),
   ];
   const found = candidates.find(candidate => fs.existsSync(candidate) && fs.statSync(candidate).isFile());
   return found ? toPosix(path.relative(root, found)) : undefined;
@@ -105,17 +109,29 @@ function importsForFile(source: ts.SourceFile, root: string, relativeFile: strin
   return imports;
 }
 
-function dependenciesForTarget(rawCode: string, imports: ImportInfo[]): UnitDependency[] {
-  return imports
-    // Retain safety boundaries even when a same-file helper uses them
-    // transitively. Filtering only by rawCode allowed real browser/filesystem
-    // work to escape the unit-test mock contract.
-    .filter(item => {
-      const boundaryNeedsIsolation = ['database', 'network', 'filesystem', 'time-random'].includes(item.boundary);
-      return boundaryNeedsIsolation
-        || item.importedNames.length === 0
-        || item.importedNames.some(name => new RegExp(`\\b${name}\\b`).test(rawCode));
-    })
+function dependenciesForTarget(
+  rootImports: ImportInfo[],
+  reachableImports: UnitTarget['supportingContext']['reachableImports'],
+): UnitDependency[] {
+  const aggregated = new Map<string, ImportInfo>();
+  for (const item of reachableImports) {
+    const key = item.resolvedFile || item.module;
+    const existing = aggregated.get(key);
+    const importedNames = item.importedNames.filter(name => name !== '*' && name !== 'default');
+    aggregated.set(key, {
+      module: item.module,
+      importedNames: [...new Set([...(existing?.importedNames || []), ...importedNames])],
+      external: !item.module.startsWith('.'),
+      boundary: classifyBoundary(`${item.module} ${item.importedNames.join(' ')}`),
+      resolvedFile: item.resolvedFile,
+    });
+  }
+  // Side-effect imports in the target module execute as soon as the real target
+  // is imported, even though they have no local binding in the call graph.
+  for (const item of rootImports.filter(candidate => candidate.importedNames.length === 0)) {
+    aggregated.set(item.resolvedFile || item.module, item);
+  }
+  return [...aggregated.values()]
     .map(item => {
       const needsNativeEnvironment = item.boundary === 'framework';
       const needsMock = item.boundary !== 'internal' && !needsNativeEnvironment;
@@ -212,6 +228,12 @@ function classifyExecution(
 ): { mode: UnitExecutionMode; reasons: string[] } {
   const reasons: string[] = [];
   if (!exported) return { mode: 'UNSUPPORTED', reasons: ['Target không được export nên test bền vững không thể import source thật.'] };
+  if (rawCode.length > MAX_TARGET_CODE_CHARS) {
+    return {
+      mode: 'UNSUPPORTED',
+      reasons: [`Target dài hơn ${MAX_TARGET_CODE_CHARS} ký tự; hãy chọn hàm nhỏ hơn hoặc tách module để giữ context chính xác.`],
+    };
+  }
   if (/\.tsx$|\.jsx$/i.test(relativeFile)) reasons.push('File giao diện cần runtime/framework thật.');
   if (kind === 'class' && /(^|\n)\s*@\w+/.test(rawCode)) reasons.push('Class có decorator cần runtime/framework thật.');
   if (dependencies.some(dependency => dependency.strategy === 'native-environment')) reasons.push('Có dependency framework cần môi trường dự án thật.');
@@ -250,7 +272,8 @@ export function buildUnitCodeIndex(manifest: UnitProjectManifest): UnitCodeIndex
         const rawCode = redactPotentialSecrets(originalRawCode);
         const exported = isExported(statement) || exportInfo.named.has(symbol);
         const defaultExport = hasModifier(statement, ts.SyntaxKind.DefaultKeyword) || exportInfo.defaultName === symbol;
-        const dependencies = dependenciesForTarget(rawCode, imports);
+        const supportingContext = buildSupportingContext(manifest.projectRoot, relativeFile, symbol);
+        const dependencies = dependenciesForTarget(imports, supportingContext.reachableImports);
         const classification = classifyExecution(relativeFile, exported, 'function', dependencies, rawCode);
         targets.push({
           id: targetId(relativeFile, symbol), sourceFile: relativeFile, sourceHash: fileHash,
@@ -259,7 +282,7 @@ export function buildUnitCodeIndex(manifest: UnitProjectManifest): UnitCodeIndex
           async: hasModifier(statement, ts.SyntaxKind.AsyncKeyword),
           parameters: parametersOf(statement, source), returnType: statement.type?.getText(source) || 'inferred',
           startLine: nodeLine(source, statement), endLine: source.getLineAndCharacterOfPosition(statement.end).line + 1,
-          rawCode, dependencies, branches: branchesForNode(statement, source),
+          rawCode, dependencies, supportingContext, branches: branchesForNode(statement, source),
           executionMode: classification.mode, unsupportedReasons: classification.reasons,
         });
       }
@@ -272,7 +295,8 @@ export function buildUnitCodeIndex(manifest: UnitProjectManifest): UnitCodeIndex
           const rawCode = redactPotentialSecrets(originalRawCode);
           const exported = isExported(statement) || exportInfo.named.has(declaration.name.text);
           const defaultExport = exportInfo.defaultName === declaration.name.text;
-          const dependencies = dependenciesForTarget(rawCode, imports);
+          const supportingContext = buildSupportingContext(manifest.projectRoot, relativeFile, declaration.name.text);
+          const dependencies = dependenciesForTarget(imports, supportingContext.reachableImports);
           const classification = classifyExecution(relativeFile, exported, 'function', dependencies, rawCode);
           targets.push({
             id: targetId(relativeFile, declaration.name.text), sourceFile: relativeFile, sourceHash: fileHash,
@@ -280,7 +304,7 @@ export function buildUnitCodeIndex(manifest: UnitProjectManifest): UnitCodeIndex
             defaultExport, async: hasModifier(declaration.initializer, ts.SyntaxKind.AsyncKeyword),
             parameters: parametersOf(declaration.initializer, source), returnType: declaration.type?.getText(source) || declaration.initializer.type?.getText(source) || 'inferred',
             startLine: nodeLine(source, statement), endLine: source.getLineAndCharacterOfPosition(statement.end).line + 1,
-            rawCode, dependencies, branches: branchesForNode(declaration.initializer, source),
+            rawCode, dependencies, supportingContext, branches: branchesForNode(declaration.initializer, source),
             executionMode: classification.mode, unsupportedReasons: classification.reasons,
           });
         }
@@ -292,7 +316,8 @@ export function buildUnitCodeIndex(manifest: UnitProjectManifest): UnitCodeIndex
         const rawCode = redactPotentialSecrets(originalRawCode);
         const exported = isExported(statement) || exportInfo.named.has(symbol);
         const defaultExport = hasModifier(statement, ts.SyntaxKind.DefaultKeyword) || exportInfo.defaultName === symbol;
-        const dependencies = dependenciesForTarget(rawCode, imports);
+        const supportingContext = buildSupportingContext(manifest.projectRoot, relativeFile, symbol);
+        const dependencies = dependenciesForTarget(imports, supportingContext.reachableImports);
         const classification = classifyExecution(relativeFile, exported, 'class', dependencies, rawCode);
         targets.push({
           id: targetId(relativeFile, symbol), sourceFile: relativeFile, sourceHash: fileHash,
@@ -300,7 +325,7 @@ export function buildUnitCodeIndex(manifest: UnitProjectManifest): UnitCodeIndex
           defaultExport, async: false,
           parameters: [], returnType: symbol,
           startLine: nodeLine(source, statement), endLine: source.getLineAndCharacterOfPosition(statement.end).line + 1,
-          rawCode, dependencies, branches: branchesForNode(statement, source),
+          rawCode, dependencies, supportingContext, branches: branchesForNode(statement, source),
           executionMode: classification.mode, unsupportedReasons: classification.reasons,
         });
       }

@@ -42,6 +42,8 @@ Giá trị JSON đặc biệt phải mã hoá, không viết thành chuỗi thư
 
 Expected phải giữ đúng kiểu trong `returnType`. Không đổi `Map` thành object thường hoặc `Set` thành array. Target `async` dùng `resolve/reject`; target đồng bộ dùng `return/throw`.
 
+Nếu target gọi helper trong `supportingContext.callGraph`, phải trace hành vi qua `helperDefinitions`, `constantDefinitions` và `typeDefinitions` trước khi lập input/expected. Cấm tự bịa shape của object khi type definition đã được cung cấp. Nếu `unresolvedSymbols` còn chứa symbol cần thiết để xác định oracle, ghi clarification thay vì đoán.
+
 ## Quy tắc dependency
 
 - Chỉ mock dependency xuất hiện trong `dependencies`.

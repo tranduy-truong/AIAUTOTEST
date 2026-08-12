@@ -1,5 +1,10 @@
+import fs from 'fs';
+import path from 'path';
 import { describe, expect, it } from 'vitest';
-import { validateGeneratedUnitCode } from '../../src/agents/generator/unit-generator.js';
+import {
+  typecheckGeneratedUnitFile,
+  validateGeneratedUnitCode,
+} from '../../src/agents/generator/unit-generator.js';
 import type { UnitPlanTarget, UnitTarget } from '../../src/core/unit/schema.js';
 
 const target: UnitTarget = {
@@ -7,7 +12,12 @@ const target: UnitTarget = {
   symbol: 'applyDiscount', kind: 'function', exported: true, defaultExport: false, async: false,
   parameters: [], returnType: 'number', startLine: 1, endLine: 1,
   rawCode: 'export function applyDiscount() { return 90; }',
-  dependencies: [], branches: [{ id: 'B001_PATH', kind: 'if', condition: 'default', outcome: 'return', line: 1 }],
+  dependencies: [],
+  supportingContext: {
+    callGraph: [], helperDefinitions: [], typeDefinitions: [], constantDefinitions: [],
+    reachableImports: [], unresolvedSymbols: [], truncated: false,
+  },
+  branches: [{ id: 'B001_PATH', kind: 'if', condition: 'default', outcome: 'return', line: 1 }],
   executionMode: 'NATIVE_DIRECT', unsupportedReasons: [],
 };
 const planTarget: UnitPlanTarget = {
@@ -20,6 +30,20 @@ const planTarget: UnitPlanTarget = {
 };
 
 describe('Unit Generator contract', () => {
+  it('typechecks a generated file before accepting it', () => {
+    const goodFile = path.join(process.cwd(), 'tests', 'unit', '.unit-preflight-good.ts');
+    const badFile = path.join(process.cwd(), 'tests', 'unit', '.unit-preflight-bad.ts');
+    try {
+      fs.writeFileSync(goodFile, 'const value: number = 1; export { value };\n');
+      fs.writeFileSync(badFile, "const value: number = 'wrong'; export { value };\n");
+      expect(typecheckGeneratedUnitFile(process.cwd(), goodFile)).toEqual([]);
+      expect(typecheckGeneratedUnitFile(process.cwd(), badFile).join('\n')).toContain("not assignable to type 'number'");
+    } finally {
+      fs.rmSync(goodFile, { force: true });
+      fs.rmSync(badFile, { force: true });
+    }
+  });
+
   it('accepts a test that imports the real source', () => {
     const code = `
 import { describe, expect, it } from 'vitest';

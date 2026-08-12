@@ -86,7 +86,9 @@ Kiến trúc công khai vẫn là **Planner → Generator → Healer**. Code Rea
 - Hàm, arrow function và class được `export`.
 - Phân tích `if/else`, ternary, `switch`, `catch` và vòng lặp bằng TypeScript AST.
 - Phân loại dependency database/API/filesystem/time để Generator mock đúng ranh giới.
+- Dựng call graph/type graph có giới hạn để cung cấp đúng helper, constant và interface reachable; không kéo dependency của hàm không liên quan.
 - Test sinh tại `<du-an-dich>/tests/unit/ai-generated/` và luôn import source thật.
+- File sinh phải qua static contract và TypeScript preflight; phiên chạy chỉ giữ file của lần Generator thành công gần nhất.
 - Healer Unit chạy theo chính sách `diagnose-only`: không đổi expected, không sửa source sản phẩm và không skip test.
 
 ### Cách dùng
@@ -108,6 +110,7 @@ artifacts/unit/<project>/<yyyyMMdd_HHmmss_SSS>/
 ├── code-index.json
 ├── branch-map.json
 ├── dependency-map.json
+├── supporting-context.json
 ├── context-bundle.json
 ├── test-plan-unit.json
 ├── test-plan-unit.md
@@ -117,4 +120,4 @@ artifacts/unit/<project>/<yyyyMMdd_HHmmss_SSS>/
 └── healer-diagnosis.json
 ```
 
-JSON là hợp đồng cho chương trình; Markdown là bản trình bày để tester đọc. `sourceHash` chặn Generator nếu file nguồn đã thay đổi sau khi Planner lập kế hoạch.
+JSON là hợp đồng cho chương trình; Markdown là bản trình bày để tester đọc. `supporting-context.json` chứa call graph, helper, type và constant thật sự liên quan đến target. `sourceHash` chặn Generator nếu target hoặc supporting source đã thay đổi sau khi Planner lập kế hoạch.

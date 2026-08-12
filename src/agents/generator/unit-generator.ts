@@ -5,6 +5,7 @@ import * as ts from 'typescript';
 import { OpenAIAdapter } from '../../adapters/openai.js';
 import {
   freshSourceHash,
+  freshUnitFileHash,
   loadUnitContext,
   loadUnitSession,
   updateUnitSession,
@@ -79,6 +80,46 @@ function datedUniqueTestPath(
 function extractCode(rawOutput: string): string {
   const fenced = rawOutput.match(/```(?:typescript|ts|javascript|js)?\s*([\s\S]*?)```/i);
   return (fenced?.[1] || rawOutput).trim().replace(/^\/\/ FILE:.*\n?/m, '').trim();
+}
+
+function findTsConfig(projectRoot: string): string | undefined {
+  for (const name of ['tsconfig.json', 'jsconfig.json']) {
+    const candidate = path.join(projectRoot, name);
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return undefined;
+}
+
+function formatDiagnostic(diagnostic: ts.Diagnostic): string {
+  const message = ts.flattenDiagnosticMessageText(diagnostic.messageText, ' ');
+  if (!diagnostic.file || diagnostic.start === undefined) return message;
+  const position = diagnostic.file.getLineAndCharacterOfPosition(diagnostic.start);
+  return `${position.line + 1}:${position.character + 1} ${message}`;
+}
+
+export function typecheckGeneratedUnitFile(projectRoot: string, testFile: string): string[] {
+  const configPath = findTsConfig(projectRoot);
+  let options: ts.CompilerOptions = {
+    target: ts.ScriptTarget.ES2022,
+    module: ts.ModuleKind.NodeNext,
+    moduleResolution: ts.ModuleResolutionKind.NodeNext,
+    esModuleInterop: true,
+    allowJs: true,
+    skipLibCheck: true,
+    noEmit: true,
+  };
+  if (configPath) {
+    const config = ts.readConfigFile(configPath, ts.sys.readFile);
+    if (!config.error) {
+      const parsed = ts.parseJsonConfigFileContent(config.config, ts.sys, path.dirname(configPath));
+      options = { ...parsed.options, noEmit: true, incremental: false, composite: false };
+    }
+  }
+  const normalizedTestFile = path.resolve(testFile);
+  const program = ts.createProgram({ rootNames: [normalizedTestFile], options });
+  return ts.getPreEmitDiagnostics(program)
+    .filter(diagnostic => diagnostic.file && path.resolve(diagnostic.file.fileName) === normalizedTestFile)
+    .map(formatDiagnostic);
 }
 
 export interface UnitGeneratedCodeValidation {
@@ -308,7 +349,7 @@ function buildPrompt(options: {
     sourceImportPath: options.importPath,
     dependencies,
     rawCode: options.target.rawCode,
-  })}\n\n[TEST PLAN ĐÃ XÁC MINH]\n${JSON.stringify(options.planTarget)}\n\n[REQUIREMENTS]\n${options.requirements || 'Không có; mọi expected suy ra từ implementation phải được giữ đúng như Planner đã đánh dấu.'}\n\nChỉ xuất một file ${options.outputLanguage} hoàn chỉnh trong code fence. Không giải thích.`;
+  })}\n\n[SUPPORTING CONTEXT REACHABLE ĐÃ XÁC MINH]\n${JSON.stringify(options.target.supportingContext)}\n\n[TEST PLAN ĐÃ XÁC MINH]\n${JSON.stringify(options.planTarget)}\n\n[REQUIREMENTS]\n${options.requirements || 'Không có; mọi expected suy ra từ implementation phải được giữ đúng như Planner đã đánh dấu.'}\n\nChỉ xuất một file ${options.outputLanguage} hoàn chỉnh trong code fence. Không giải thích.`;
 }
 
 function writeGenerationManifest(sessionDirectory: string, generatedFiles: string[], failures: unknown[]): void {
@@ -351,6 +392,21 @@ export async function runUnitGenerator(): Promise<boolean> {
     const currentHash = freshSourceHash(target, context.project.projectRoot);
     if (currentHash !== target.sourceHash || planTarget.sourceHash !== target.sourceHash) {
       failures.push({ target: label, errors: ['Source đã thay đổi sau khi Planner lập kế hoạch. Hãy chạy Planner lại.'] });
+      continue;
+    }
+    const supportingDefinitions = [
+      ...target.supportingContext.helperDefinitions,
+      ...target.supportingContext.typeDefinitions,
+      ...target.supportingContext.constantDefinitions,
+    ];
+    const staleSupportingFile = supportingDefinitions.find(definition =>
+      freshUnitFileHash(definition.sourceFile, context.project.projectRoot) !== definition.sourceHash,
+    );
+    if (staleSupportingFile) {
+      failures.push({
+        target: label,
+        errors: [`Supporting source đã thay đổi sau Planner: ${staleSupportingFile.sourceFile}. Hãy quét và lập kế hoạch lại.`],
+      });
       continue;
     }
     const importPath = sourceImportPath(target, context.project.projectRoot, outputDirectory);
@@ -414,12 +470,24 @@ export async function runUnitGenerator(): Promise<boolean> {
       /\.(?:js|jsx|mjs|cjs)$/i.test(target.sourceFile) ? '.test.js' : '.test.ts',
     );
     fs.writeFileSync(testPath, `${code}\n`);
+    const typeErrors = typecheckGeneratedUnitFile(context.project.projectRoot, testPath);
+    if (typeErrors.length > 0) {
+      fs.rmSync(testPath, { force: true });
+      failures.push({
+        target: label,
+        errors: typeErrors.map(error => `TypeScript preflight: ${error}`),
+      });
+      fs.writeFileSync(path.join(session.runDirectory, `${slug(target.symbol)}.typecheck-errors.json`), `${JSON.stringify(typeErrors, null, 2)}\n`);
+      continue;
+    }
     generatedFiles.push(testPath);
     console.log(`   ✅ Đã tạo: ${testPath}`);
   }
 
-  const allGenerated = [...new Set([...session.generatedFiles, ...generatedFiles])];
-  updateUnitSession({ generatedFiles: allGenerated }, session);
+  // A run must be reproducible from its own generation manifest. Replacing
+  // instead of accumulating prevents a repaired generation from re-running an
+  // older invalid file produced earlier in the same session.
+  updateUnitSession({ generatedFiles: [...new Set(generatedFiles)] }, session);
   writeGenerationManifest(session.runDirectory, generatedFiles, failures);
   if (failures.length > 0) {
     console.error(`❌ ${failures.length} target bị chặn bởi Generator contract. Chi tiết: ${path.join(session.runDirectory, 'generation-manifest.json')}`);

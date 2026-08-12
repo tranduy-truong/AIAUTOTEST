@@ -77,6 +77,12 @@ function validateTarget(planTarget: UnitPlanTarget, target: UnitTarget): UnitPla
   if (planTarget.executionMode !== target.executionMode) {
     issues.push({ code: 'INVENTED_EXECUTION_MODE', target: targetLabel, message: 'Planner đã thay đổi executionMode do Target Classifier xác định.' });
   }
+  if (target.supportingContext.truncated) {
+    issues.push({
+      code: 'SUPPORTING_CONTEXT_TRUNCATED', target: targetLabel,
+      message: 'Call/type graph vượt ngân sách an toàn; hãy chọn target nhỏ hơn hoặc tách module trước khi sinh test.',
+    });
+  }
   if (!Array.isArray(planTarget.testCases) || planTarget.testCases.length === 0) {
     issues.push({ code: 'MISSING_TEST_CASES', target: targetLabel, message: 'Target không có test case.' });
     return issues;
@@ -106,6 +112,40 @@ function validateTarget(planTarget: UnitPlanTarget, target: UnitTarget): UnitPla
     } else {
       for (const message of validateDataValue(testCase.inputs, 'inputs')) {
         issues.push({ code: 'INVALID_TEST_INPUTS', target: targetLabel, testCaseId: testCase.id, message });
+      }
+      if (target.kind === 'function') {
+        const declaredParameters = new Map(target.parameters.map(parameter => [parameter.name, parameter]));
+        for (const parameter of target.parameters.filter(item => !item.optional)) {
+          if (!(parameter.name in testCase.inputs)) {
+            issues.push({
+              code: 'MISSING_REQUIRED_INPUT', target: targetLabel, testCaseId: testCase.id,
+              message: `Thiếu input bắt buộc: ${parameter.name}.`,
+            });
+          }
+        }
+        for (const [inputName, inputValue] of Object.entries(testCase.inputs)) {
+          const parameter = declaredParameters.get(inputName);
+          if (!parameter) {
+            issues.push({
+              code: 'INVENTED_INPUT', target: targetLabel, testCaseId: testCase.id,
+              message: `Input không có trong chữ ký target: ${inputName}.`,
+            });
+            continue;
+          }
+          const type = parameter.type.replace(/\s+/g, ' ').trim();
+          const mismatch =
+            (/^(?:string)(?:\s*\|\s*(?:null|undefined))*$/i.test(type) && typeof inputValue !== 'string')
+            || (/^(?:number)(?:\s*\|\s*(?:null|undefined))*$/i.test(type) && typeof inputValue !== 'number')
+            || (/^(?:boolean)(?:\s*\|\s*(?:null|undefined))*$/i.test(type) && typeof inputValue !== 'boolean')
+            || ((/\[\]|\bArray\s*</.test(type)) && !Array.isArray(inputValue))
+            || ((/^\{|\b(?:Record|Map|Set)\s*</.test(type)) && !isObject(inputValue));
+          if (mismatch) {
+            issues.push({
+              code: 'INPUT_TYPE_MISMATCH', target: targetLabel, testCaseId: testCase.id,
+              message: `Input ${inputName} không khớp type ${parameter.type}.`,
+            });
+          }
+        }
       }
     }
     if (!isObject(testCase.expected) || !['return', 'throw', 'resolve', 'reject', 'side-effect'].includes(String(testCase.expected.kind))) {

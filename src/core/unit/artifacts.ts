@@ -3,6 +3,7 @@ import path from 'path';
 import crypto from 'crypto';
 import { buildUnitCodeIndex } from './ast-reader.js';
 import { scanUnitProject } from './project-scanner.js';
+import { buildTestabilityManifest } from './testability-classifier.js';
 import type {
   StructuredUnitPlan,
   UnitCodeIndex,
@@ -60,6 +61,8 @@ function dependencyMap(index: UnitCodeIndex) {
       sourceFile: target.sourceFile,
       symbol: target.symbol,
       executionMode: target.executionMode,
+      profile: target.profile,
+      runtimeEnvironment: target.runtimeEnvironment,
       dependencies: target.dependencies,
       unsupportedReasons: target.unsupportedReasons,
     })),
@@ -114,7 +117,38 @@ export function createUnitSession(
   };
 
   fs.mkdirSync(runDirectory, { recursive: true });
+  const testability = buildTestabilityManifest({
+    projectRoot: analysis.manifest.projectRoot,
+    sourceFiles: analysis.manifest.sourceFiles,
+    targets: analysis.index.targets,
+    selectedTargetIds,
+  });
+  const selectedEntries = testability.entries.filter(entry => entry.selected);
+  const partitions = Object.fromEntries(
+    [...new Set(selectedEntries.map(entry => entry.profile))].map(profile => [
+      profile,
+      selectedEntries.filter(entry => entry.profile === profile).map(entry => entry.id),
+    ]),
+  );
   writeJson(path.join(runDirectory, 'project-manifest.json'), analysis.manifest);
+  writeJson(path.join(runDirectory, 'testability-manifest.json'), testability);
+  writeJson(path.join(runDirectory, 'target-partitions.json'), {
+    version: 1,
+    generatedAt: new Date().toISOString(),
+    partitions,
+  });
+  writeJson(path.join(runDirectory, 'untestable-targets.json'), {
+    version: 1,
+    generatedAt: new Date().toISOString(),
+    targets: testability.entries
+      .filter(entry => !entry.generatable)
+      .map(entry => ({
+        target: entry.id,
+        profile: entry.profile,
+        status: entry.profile === 'NO_RUNTIME_TEST' ? 'NO_RUNTIME' : 'REFACTOR_REQUIRED',
+        reasons: entry.reasons,
+      })),
+  });
   writeJson(path.join(runDirectory, 'code-index.json'), { ...analysis.index, targets: selected });
   writeJson(path.join(runDirectory, 'branch-map.json'), branchMap({ ...analysis.index, targets: selected }));
   writeJson(path.join(runDirectory, 'dependency-map.json'), dependencyMap({ ...analysis.index, targets: selected }));

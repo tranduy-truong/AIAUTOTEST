@@ -188,6 +188,7 @@ export function buildSupportingContext(
   projectRoot: string,
   sourceFile: string,
   targetSymbol: string,
+  targetMember?: string,
 ): UnitSupportingContext {
   const cache = new Map<string, ParsedFile | undefined>();
   const load = (relativeFile: string) => {
@@ -200,8 +201,18 @@ export function buildSupportingContext(
     reachableImports: [], unresolvedSymbols: [], truncated: false,
   };
   if (!rootFile) return { ...empty, unresolvedSymbols: [targetSymbol] };
-  const target = exportedDeclaration(rootFile, targetSymbol) || rootFile.declarations.get(targetSymbol);
-  if (!target) return { ...empty, unresolvedSymbols: [targetSymbol] };
+  const targetDeclaration = exportedDeclaration(rootFile, targetSymbol) || rootFile.declarations.get(targetSymbol);
+  let target: ts.Node | undefined = targetDeclaration;
+  if (targetMember && targetDeclaration && ts.isClassDeclaration(targetDeclaration)) {
+    target = targetDeclaration.members.find(member => {
+      if (targetMember === 'constructor') return ts.isConstructorDeclaration(member);
+      if (!ts.isMethodDeclaration(member) || !member.name) return false;
+      return (ts.isIdentifier(member.name) || ts.isStringLiteralLike(member.name))
+        && member.name.text === targetMember;
+    });
+  }
+  const targetLabel = targetMember ? `${targetSymbol}.${targetMember}` : targetSymbol;
+  if (!target) return { ...empty, unresolvedSymbols: [targetLabel] };
 
   const helperDefinitions: UnitSupportingDefinition[] = [];
   const typeDefinitions: UnitSupportingDefinition[] = [];
@@ -209,7 +220,7 @@ export function buildSupportingContext(
   const callGraph: UnitSupportingContext['callGraph'] = [];
   const reachableImports = new Map<string, UnitSupportingContext['reachableImports'][number]>();
   const unresolvedSymbols = new Set<string>();
-  const visited = new Set<string>([`${sourceFile}#${targetSymbol}`]);
+  const visited = new Set<string>([`${sourceFile}#${targetLabel}`]);
   let usedChars = 0;
   let truncated = false;
 
@@ -247,7 +258,7 @@ export function buildSupportingContext(
     return { file: dependencyFile, symbol, statement: exportedDeclaration(dependencyFile, symbol) || dependencyFile.declarations.get(symbol) };
   };
 
-  const walk = (file: ParsedFile, symbol: string, statement: ts.Statement, depth: number) => {
+  const walk = (file: ParsedFile, symbol: string, statement: ts.Node, depth: number) => {
     const refs = referencesIn(statement);
     for (const call of refs.calls) {
       let calleeFile = file;
@@ -325,7 +336,7 @@ export function buildSupportingContext(
     }
   };
 
-  walk(rootFile, targetSymbol, target, 0);
+  walk(rootFile, targetLabel, target, 0);
   return {
     callGraph,
     helperDefinitions,

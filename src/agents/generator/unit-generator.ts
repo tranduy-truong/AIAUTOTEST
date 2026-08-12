@@ -13,11 +13,65 @@ import {
 import type {
   StructuredUnitPlan,
   UnitDependency,
+  UnitGenerationTargetResult,
   UnitPlanTarget,
   UnitTarget,
+  UnitTestabilityProfile,
 } from '../../core/unit/schema.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+const PROFILE_PROMPTS: Partial<Record<UnitTestabilityProfile, string>> = {
+  UNIT_NATIVE: 'unit-native.md',
+  UNIT_MOCKED: 'unit-mocked.md',
+  PROCESS_SANDBOX: 'process-sandbox.md',
+  COMPONENT_DOM: 'component-dom.md',
+  INTEGRATION_SANDBOX: 'integration-sandbox.md',
+  ENTRYPOINT_SMOKE: 'entrypoint-smoke.md',
+};
+
+function readProfilePrompt(profile: UnitTestabilityProfile): string {
+  const file = PROFILE_PROMPTS[profile];
+  return file
+    ? fs.readFileSync(path.join(__dirname, 'unit-prompts', file), 'utf-8')
+    : `# Profile: ${profile}\n\nProfile này không sinh runtime test.`;
+}
+
+function projectDependencies(projectRoot: string): Record<string, string> {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf-8')) as {
+      dependencies?: Record<string, string>;
+      devDependencies?: Record<string, string>;
+    };
+    return { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
+  } catch {
+    return {};
+  }
+}
+
+function profileCapability(target: UnitTarget, projectRoot: string): { supported: boolean; reason?: string } {
+  if (['UNIT_NATIVE', 'UNIT_MOCKED', 'PROCESS_SANDBOX'].includes(target.profile)) return { supported: true };
+  if (target.profile === 'COMPONENT_DOM') {
+    const dependencies = projectDependencies(projectRoot);
+    const hasDom = Boolean(dependencies.jsdom || dependencies['happy-dom']);
+    const hasLibrary = Boolean(
+      dependencies['@testing-library/react'] || dependencies['@vue/test-utils']
+      || dependencies['@testing-library/vue'] || dependencies['@testing-library/svelte'],
+    );
+    return hasDom && hasLibrary
+      ? { supported: true }
+      : { supported: false, reason: 'Dự án thiếu DOM environment hoặc component testing library tương ứng.' };
+  }
+  if (target.profile === 'INTEGRATION_SANDBOX') {
+    return { supported: false, reason: 'Chưa phát hiện sandbox database/backend an toàn; không tự kết nối hạ tầng thật.' };
+  }
+  if (target.profile === 'ENTRYPOINT_SMOKE') {
+    return { supported: false, reason: 'Entrypoint có thể chạy top-level side effect; cần startup harness được dự án khai báo.' };
+  }
+  return { supported: false, reason: target.profile === 'NO_RUNTIME_TEST'
+    ? 'Target không có hành vi runtime.'
+    : 'Target cần refactor để có public test seam.' };
+}
 
 function toPosix(value: string): string {
   return value.replace(/\\/g, '/');
@@ -243,11 +297,25 @@ function inspectGeneratedMocks(code: string, framework: 'vitest' | 'jest'): {
 
 function targetImportIsPresent(code: string, target: UnitTarget, importPath: string): boolean {
   const escapedPath = importPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const importSymbol = target.classMethod?.className || target.symbol;
   if (target.defaultExport) {
     return new RegExp(`import\\s+[A-Za-z_$][\\w$]*\\s+from\\s+['"]${escapedPath}['"]`).test(code);
   }
-  const escapedSymbol = target.symbol.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const escapedSymbol = importSymbol.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   return new RegExp(`import\\s*\\{[^}]*\\b${escapedSymbol}\\b[^}]*\\}\\s*from\\s*['"]${escapedPath}['"]`).test(code);
+}
+
+function globalMockIsPresent(code: string, dependency: UnitDependency): boolean {
+  if (dependency.globalName === 'fetch') {
+    return /(?:stubGlobal\s*\(\s*['"]fetch['"]|spyOn\s*\(\s*globalThis\s*,\s*['"]fetch['"]|globalThis\.fetch\s*=)/.test(code);
+  }
+  if (dependency.globalName === 'Date.now') {
+    return /spyOn\s*\(\s*Date\s*,\s*['"]now['"]/.test(code);
+  }
+  if (dependency.globalName === 'Math.random') {
+    return /spyOn\s*\(\s*Math\s*,\s*['"]random['"]/.test(code);
+  }
+  return false;
 }
 
 export function validateGeneratedUnitCode(options: {
@@ -269,12 +337,18 @@ export function validateGeneratedUnitCode(options: {
   if (/(?:\/\/|\/\*)\s*(?:TODO|\.\.\.)|^\s*\.\.\.\s*;?\s*$/m.test(code)) {
     errors.push('Test chứa TODO hoặc placeholder rút gọn.');
   }
+  if (
+    target.profile === 'COMPONENT_DOM' && framework === 'vitest'
+    && !/^\s*\/\/\s*@vitest-environment\s+(?:jsdom|happy-dom)\s*$/m.test(code)
+  ) {
+    errors.push('COMPONENT_DOM phải khai báo Vitest DOM environment ở đầu file.');
+  }
 
   const inspectedMocks = inspectGeneratedMocks(code, framework);
   for (const syntaxError of inspectedMocks.syntaxErrors) errors.push(`File test sai cú pháp: ${syntaxError}`);
   const allowedMockPaths = new Set(
     target.dependencies
-      .filter(dependency => dependency.strategy === 'mock')
+      .filter(dependency => dependency.strategy === 'mock' && dependency.mockKind !== 'global')
       .map(dependency => dependencyPaths.get(dependency.module))
       .filter((value): value is string => Boolean(value)),
   );
@@ -298,9 +372,17 @@ export function validateGeneratedUnitCode(options: {
     if (count === 0) errors.push(`Thiếu top-level mock bắt buộc cho dependency: ${mockPath}`);
     if (count > 1) errors.push(`Dependency ${mockPath} chỉ được mock một lần (hiện tại: ${count}).`);
   }
+  for (const dependency of target.dependencies.filter(item => item.strategy === 'mock' && item.mockKind === 'global')) {
+    if (!globalMockIsPresent(code, dependency)) {
+      errors.push(`Thiếu mock global bắt buộc cho dependency: ${dependency.module}`);
+    }
+  }
 
-  const escaped = target.symbol.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  if (new RegExp(`\\bfunction\\s+${escaped}\\s*\\(`).test(code)) errors.push('Generator đã copy hàm vào test thay vì import source thật.');
+  const productionSymbol = target.classMethod?.className || target.symbol;
+  const escaped = productionSymbol.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  if (target.kind === 'function' && new RegExp(`\\bfunction\\s+${escaped}\\s*\\(`).test(code)) {
+    errors.push('Generator đã copy hàm vào test thay vì import source thật.');
+  }
   if (new RegExp(`\\bclass\\s+${escaped}\\b`).test(code)) errors.push('Generator đã copy class vào test thay vì import source thật.');
   if (new RegExp(`\\b(?:const|let|var)\\s+${escaped}\\s*=`).test(code)) errors.push('Generator đã khai báo lại target trong test.');
 
@@ -308,6 +390,13 @@ export function validateGeneratedUnitCode(options: {
     const count = [...code.matchAll(new RegExp(`\\b${testCase.id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'g'))].length;
     if (count !== 1) errors.push(`${testCase.id} phải xuất hiện đúng một lần trong file test (hiện tại: ${count}).`);
     for (const mock of testCase.mocks || []) {
+      const dependency = target.dependencies.find(item => item.module === mock.module);
+      if (dependency?.mockKind === 'global') {
+        if (!globalMockIsPresent(code, dependency)) {
+          errors.push(`${testCase.id} chưa mock global đã xác minh: ${mock.module}`);
+        }
+        continue;
+      }
       const mapped = dependencyPaths.get(mock.module);
       if (!mapped) errors.push(`${testCase.id} tham chiếu mock chưa được Dependency Resolver xác minh: ${mock.module}`);
       else if (!code.includes(mapped)) errors.push(`${testCase.id} chưa mock dependency theo đường dẫn đã xác minh: ${mapped}`);
@@ -330,13 +419,15 @@ function buildPrompt(options: {
     ...dependency,
     testImportPath: options.dependencyPaths.get(dependency.module),
   }));
-  const importAlias = options.target.symbol === 'default'
+  const importSymbol = options.target.classMethod?.className || options.target.symbol;
+  const importAlias = importSymbol === 'default'
     ? `${slug(path.basename(withoutSourceExtension(options.target.sourceFile))).replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase())}Target`
-    : options.target.symbol;
+    : importSymbol;
   const requiredTargetImport = options.target.defaultExport
     ? `import ${importAlias} from '${options.importPath}';`
-    : `import { ${options.target.symbol} } from '${options.importPath}';`;
-  return `${options.systemPrompt}\n\n[FRAMEWORK]\n${options.framework}\n\n[NGÔN NGỮ FILE TEST]\n${options.outputLanguage}\n\n[IMPORT TARGET BẮT BUỘC]\n${requiredTargetImport}\n\n[TARGET ĐÃ XÁC MINH]\n${JSON.stringify({
+    : `import { ${importSymbol} } from '${options.importPath}';`;
+  const profilePrompt = readProfilePrompt(options.target.profile);
+  return `${options.systemPrompt}\n\n[PROFILE TEMPLATE BẮT BUỘC]\n${profilePrompt}\n\n[FRAMEWORK]\n${options.framework}\n\n[NGÔN NGỮ FILE TEST]\n${options.outputLanguage}\n\n[IMPORT TARGET BẮT BUỘC]\n${requiredTargetImport}\n\n[TARGET ĐÃ XÁC MINH]\n${JSON.stringify({
     sourceFile: options.target.sourceFile,
     symbol: options.target.symbol,
     kind: options.target.kind,
@@ -344,27 +435,74 @@ function buildPrompt(options: {
     async: options.target.async,
     parameters: options.target.parameters,
     returnType: options.target.returnType,
+    classMethod: options.target.classMethod,
     sourceHash: options.target.sourceHash,
     executionMode: options.target.executionMode,
+    profile: options.target.profile,
+    runtimeEnvironment: options.target.runtimeEnvironment,
     sourceImportPath: options.importPath,
     dependencies,
     rawCode: options.target.rawCode,
   })}\n\n[SUPPORTING CONTEXT REACHABLE ĐÃ XÁC MINH]\n${JSON.stringify(options.target.supportingContext)}\n\n[TEST PLAN ĐÃ XÁC MINH]\n${JSON.stringify(options.planTarget)}\n\n[REQUIREMENTS]\n${options.requirements || 'Không có; mọi expected suy ra từ implementation phải được giữ đúng như Planner đã đánh dấu.'}\n\nChỉ xuất một file ${options.outputLanguage} hoàn chỉnh trong code fence. Không giải thích.`;
 }
 
-function writeGenerationManifest(sessionDirectory: string, generatedFiles: string[], failures: unknown[]): void {
+export function buildGenerationManifest(results: UnitGenerationTargetResult[]) {
+  const generatedFiles = results.flatMap(result => result.file ? [result.file] : []);
+  const statusCounts = Object.fromEntries(
+    [...new Set(results.map(result => result.status))].map(status => [
+      status,
+      results.filter(result => result.status === status).length,
+    ]),
+  );
+  return {
+    version: 1 as const,
+    generatedAt: new Date().toISOString(),
+    summary: {
+      total: results.length,
+      generated: results.filter(result => result.status === 'GENERATED').length,
+      notGenerated: results.filter(result => result.status !== 'GENERATED').length,
+      statusCounts,
+    },
+    generatedFiles,
+    targets: results,
+  };
+}
+
+function writeGenerationManifest(sessionDirectory: string, results: UnitGenerationTargetResult[]): void {
   fs.writeFileSync(
     path.join(sessionDirectory, 'generation-manifest.json'),
-    `${JSON.stringify({
-      version: 1,
-      generatedAt: new Date().toISOString(),
-      generatedFiles,
-      failures,
-    }, null, 2)}\n`,
+    `${JSON.stringify(buildGenerationManifest(results), null, 2)}\n`,
   );
 }
 
-export async function runUnitGenerator(): Promise<boolean> {
+function updateUntestableTargets(sessionDirectory: string, results: UnitGenerationTargetResult[]): void {
+  const file = path.join(sessionDirectory, 'untestable-targets.json');
+  let existing: Array<Record<string, unknown>> = [];
+  try {
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf-8')) as { targets?: Array<Record<string, unknown>> };
+    existing = parsed.targets || [];
+  } catch {}
+  const generatedIds = new Set(results.map(result => result.target));
+  const targets = [
+    ...existing.filter(item => !generatedIds.has(String(item.target))),
+    ...results.filter(result => result.status !== 'GENERATED').map(result => ({
+      target: result.target,
+      profile: result.profile,
+      status: result.status,
+      reasons: result.errors,
+    })),
+  ];
+  fs.writeFileSync(file, `${JSON.stringify({
+    version: 1,
+    generatedAt: new Date().toISOString(),
+    targets,
+  }, null, 2)}\n`);
+}
+
+export async function runUnitGenerator(options: {
+  preserveExistingFiles?: boolean;
+  onlyTargetIds?: string[];
+} = {}): Promise<boolean> {
   const session = loadUnitSession();
   const context = loadUnitContext(session);
   if (context.project.testFramework === 'unknown') {
@@ -379,19 +517,28 @@ export async function runUnitGenerator(): Promise<boolean> {
   fs.mkdirSync(outputDirectory, { recursive: true });
 
   const generatedFiles: string[] = [];
-  const failures: Array<{ target: string; errors: string[] }> = [];
-  for (const planTarget of plan.targets) {
+  const results: UnitGenerationTargetResult[] = [];
+  const allowedTargets = options.onlyTargetIds ? new Set(options.onlyTargetIds) : undefined;
+  for (const planTarget of plan.targets.filter(item => !allowedTargets || allowedTargets.has(`${item.sourceFile}#${item.symbol}`))) {
     const target = context.targets.find(
       item => item.sourceFile === planTarget.sourceFile && item.symbol === planTarget.symbol,
     );
     const label = `${planTarget.sourceFile}#${planTarget.symbol}`;
     if (!target) {
-      failures.push({ target: label, errors: ['Unit Context không chứa target của Planner.'] });
+      results.push({ target: label, profile: planTarget.profile || 'REFACTOR_REQUIRED', status: 'STATIC_VALIDATION_FAILED', errors: ['Unit Context không chứa target của Planner.'] });
+      continue;
+    }
+    const capability = profileCapability(target, context.project.projectRoot);
+    if (!capability.supported) {
+      const status = target.profile === 'NO_RUNTIME_TEST'
+        ? 'NO_RUNTIME'
+        : target.profile === 'REFACTOR_REQUIRED' ? 'REFACTOR_REQUIRED' : 'PROFILE_NOT_SUPPORTED';
+      results.push({ target: label, profile: target.profile, status, errors: [capability.reason || 'Profile chưa được hỗ trợ.'] });
       continue;
     }
     const currentHash = freshSourceHash(target, context.project.projectRoot);
     if (currentHash !== target.sourceHash || planTarget.sourceHash !== target.sourceHash) {
-      failures.push({ target: label, errors: ['Source đã thay đổi sau khi Planner lập kế hoạch. Hãy chạy Planner lại.'] });
+      results.push({ target: label, profile: target.profile, status: 'STALE_SOURCE', errors: ['Source đã thay đổi sau khi Planner lập kế hoạch. Hãy chạy Planner lại.'] });
       continue;
     }
     const supportingDefinitions = [
@@ -403,8 +550,10 @@ export async function runUnitGenerator(): Promise<boolean> {
       freshUnitFileHash(definition.sourceFile, context.project.projectRoot) !== definition.sourceHash,
     );
     if (staleSupportingFile) {
-      failures.push({
+      results.push({
         target: label,
+        profile: target.profile,
+        status: 'STALE_SOURCE',
         errors: [`Supporting source đã thay đổi sau Planner: ${staleSupportingFile.sourceFile}. Hãy quét và lập kế hoạch lại.`],
       });
       continue;
@@ -433,7 +582,7 @@ export async function runUnitGenerator(): Promise<boolean> {
     const adapter = new OpenAIAdapter('llama-3.3-70b-versatile');
     let result = await adapter.run({ promptDir: workDir, workDir, timeoutMs: 120000, maxTokens: 3500 });
     if (!result.ok) {
-      failures.push({ target: label, errors: [result.rawOutput] });
+      results.push({ target: label, profile: target.profile, status: 'AI_GENERATION_FAILED', errors: [result.rawOutput] });
       continue;
     }
     let code = extractCode(result.rawOutput);
@@ -460,7 +609,7 @@ export async function runUnitGenerator(): Promise<boolean> {
       }
     }
     if (!validation.ok) {
-      failures.push({ target: label, errors: validation.errors });
+      results.push({ target: label, profile: target.profile, status: 'STATIC_VALIDATION_FAILED', errors: validation.errors });
       fs.writeFileSync(path.join(session.runDirectory, `${slug(target.symbol)}.invalid.txt`), `${result.rawOutput}\n`);
       continue;
     }
@@ -473,26 +622,39 @@ export async function runUnitGenerator(): Promise<boolean> {
     const typeErrors = typecheckGeneratedUnitFile(context.project.projectRoot, testPath);
     if (typeErrors.length > 0) {
       fs.rmSync(testPath, { force: true });
-      failures.push({
+      results.push({
         target: label,
+        profile: target.profile,
+        status: 'TYPECHECK_FAILED',
         errors: typeErrors.map(error => `TypeScript preflight: ${error}`),
       });
       fs.writeFileSync(path.join(session.runDirectory, `${slug(target.symbol)}.typecheck-errors.json`), `${JSON.stringify(typeErrors, null, 2)}\n`);
       continue;
     }
     generatedFiles.push(testPath);
+    results.push({ target: label, profile: target.profile, status: 'GENERATED', file: testPath, errors: [] });
     console.log(`   ✅ Đã tạo: ${testPath}`);
   }
 
   // A run must be reproducible from its own generation manifest. Replacing
   // instead of accumulating prevents a repaired generation from re-running an
   // older invalid file produced earlier in the same session.
-  updateUnitSession({ generatedFiles: [...new Set(generatedFiles)] }, session);
-  writeGenerationManifest(session.runDirectory, generatedFiles, failures);
-  if (failures.length > 0) {
-    console.error(`❌ ${failures.length} target bị chặn bởi Generator contract. Chi tiết: ${path.join(session.runDirectory, 'generation-manifest.json')}`);
-    return false;
+  const generatedTargetFiles = {
+    ...(options.preserveExistingFiles ? session.generatedTargetFiles || {} : {}),
+    ...Object.fromEntries(results.flatMap(result => result.file ? [[result.target, result.file]] : [])),
+  };
+  updateUnitSession({
+    generatedFiles: [...new Set(Object.values(generatedTargetFiles).filter(file => fs.existsSync(file)))],
+    generatedTargetFiles,
+  }, session);
+  writeGenerationManifest(session.runDirectory, results);
+  updateUntestableTargets(session.runDirectory, results);
+  const notGenerated = results.filter(result => result.status !== 'GENERATED');
+  if (notGenerated.length > 0) {
+    console.warn(`⚠️ ${notGenerated.length}/${results.length} target chưa sinh được; batch vẫn tiếp tục. Chi tiết: ${path.join(session.runDirectory, 'generation-manifest.json')}`);
   }
-  console.log(`✅ Đã sinh ${generatedFiles.length} file Unit Test import source thật tại: ${outputDirectory}`);
+  if (generatedFiles.length > 0) {
+    console.log(`✅ Đã sinh ${generatedFiles.length} file Unit Test import source thật tại: ${outputDirectory}`);
+  }
   return generatedFiles.length > 0;
 }

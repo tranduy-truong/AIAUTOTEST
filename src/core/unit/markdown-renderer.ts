@@ -12,6 +12,7 @@ export function renderUnitPlanMarkdown(plan: StructuredUnitPlan): string {
   for (const target of plan.targets) {
     lines.push(`## ${target.sourceFile} — ${target.symbol}`, '');
     lines.push(`- Chế độ chạy: ${target.executionMode}`);
+    lines.push(`- Testability profile: ${target.profile}`);
     lines.push(`- Source hash: \`${target.sourceHash}\``, '');
     lines.push('| ID | Trường hợp | Branch | Oracle |', '|---|---|---|---|');
     for (const testCase of target.testCases) {

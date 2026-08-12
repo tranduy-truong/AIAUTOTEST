@@ -15,6 +15,7 @@ import {
 } from '../../core/unit/artifacts.js';
 import { renderUnitPlanMarkdown } from '../../core/unit/markdown-renderer.js';
 import {
+  anchorStructuredUnitPlan,
   parseStructuredUnitPlan,
   validateStructuredUnitPlan,
   type UnitPlanValidationIssue,
@@ -31,6 +32,9 @@ const E2E_INVALID_PATH = 'artifacts/test-plan-e2e.invalid.txt';
 const E2E_ERRORS_PATH = 'artifacts/planner-validation-errors.json';
 const MAX_E2E_CHUNK_CHARS = 4500;
 const MAX_E2E_CHUNK_STEPS = 14;
+// One grounded repair keeps a single-target run below common Groq TPM limits.
+// Deterministic anchoring handles immutable contract fields before this retry.
+const MAX_UNIT_PLAN_ATTEMPTS = 2;
 const STEP_BULLET = /^\s*[-*•·▪◦–—]\s*/u;
 
 function parseJsonArray(rawOutput: string): unknown[] | null {
@@ -356,18 +360,31 @@ async function planOneUnitTarget(
   }
 
   let plan = parseStructuredUnitPlan(result.rawOutput);
+  if (plan) plan = anchorStructuredUnitPlan(plan, aiContext);
   let issues: UnitPlanValidationIssue[] = plan
     ? validateStructuredUnitPlan(plan, aiContext)
     : [{ code: 'INVALID_JSON', message: 'Planner không trả về Unit Plan JSON hợp lệ.' }];
-  if (!plan || issues.length > 0) {
-    console.warn(`   Target ${index}: Unit Plan chưa đạt hợp đồng (${issues.length} lỗi), đang tự sửa một lần...`);
-    const repair = await callPlannerAdapter(createUnitRepairTask(task, issues), `_unit_${index}_repair`);
+  for (let attempt = 2; attempt <= MAX_UNIT_PLAN_ATTEMPTS && (!plan || issues.length > 0); attempt++) {
+    console.warn(
+      `   Target ${index}: Unit Plan chưa đạt hợp đồng (${issues.length} lỗi), `
+      + `đang tự sửa lần ${attempt - 1}/${MAX_UNIT_PLAN_ATTEMPTS - 1}...`,
+    );
+    const repair = await callPlannerAdapter(
+      createUnitRepairTask(task, issues),
+      `_unit_${index}_repair_${attempt}`,
+    );
     if (repair.ok) {
       result = repair;
       plan = parseStructuredUnitPlan(result.rawOutput);
+      if (plan) plan = anchorStructuredUnitPlan(plan, aiContext);
       issues = plan
         ? validateStructuredUnitPlan(plan, aiContext)
         : [{ code: 'INVALID_JSON', message: 'Planner vẫn không trả về Unit Plan JSON hợp lệ.' }];
+    } else {
+      plan = null;
+      issues = [{ code: 'AI_API_ERROR', message: repair.rawOutput }];
+      result = repair;
+      break;
     }
   }
   return { plan, issues, rawOutput: result.rawOutput };
@@ -418,6 +435,9 @@ async function runStructuredUnitPlanner(
     );
     if (plannedTargets.length === 0) {
       console.error(`❌ Không target nào đạt hợp đồng Planner Unit (${allIssues.length} lỗi). Generator đã được chặn.`);
+      for (const issue of allIssues.slice(0, 8)) {
+        console.error(`   - [${issue.code}] ${issue.testCaseId ? `${issue.testCaseId}: ` : ''}${issue.message}`);
+      }
       console.error(`   Chi tiết: ${path.join(session.runDirectory, 'planner-validation-errors.json')}`);
       return false;
     }

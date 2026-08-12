@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  anchorStructuredUnitPlan,
   validateStructuredUnitPlan,
 } from '../../src/core/unit/plan-validator.js';
 import type {
@@ -26,7 +27,8 @@ function target(): UnitTarget {
       { id: 'B001_TRUE', kind: 'if', condition: 'total <= 0', outcome: 'throw', line: 2 },
       { id: 'B001_FALSE', kind: 'if', condition: 'total <= 0', outcome: 'continue', line: 2 },
     ],
-    executionMode: 'NATIVE_WITH_MOCKS', unsupportedReasons: [],
+    executionMode: 'NATIVE_WITH_MOCKS', profile: 'UNIT_MOCKED', runtimeEnvironment: 'node',
+    profileReasons: ['mock boundary'], unsupportedReasons: [],
   };
 }
 
@@ -48,6 +50,7 @@ function validPlan(): StructuredUnitPlan {
     project: { name: 'shop', root: '/project', testFramework: 'vitest' },
     targets: [{
       sourceFile: 'src/discount.ts', symbol: 'applyDiscount', sourceHash: 'hash-123', executionMode: 'NATIVE_WITH_MOCKS',
+      profile: 'UNIT_MOCKED',
       testCases: [
         {
           id: 'UT_DISCOUNT_001', name: 'reject invalid total', branchIds: ['B001_TRUE'], inputs: { total: 0 },
@@ -141,5 +144,53 @@ describe('Structured Unit Plan validator', () => {
     plan.targets[0].testCases[0].inputs = {};
     expect(validateStructuredUnitPlan(plan, context()).map(issue => issue.code))
       .toContain('MISSING_REQUIRED_INPUT');
+  });
+
+  it('re-anchors immutable Code Reader fields without changing test intent', () => {
+    const plan = validPlan();
+    plan.project = { name: 'invented', root: '/invented', testFramework: 'jest' };
+    plan.targets[0].sourceFile = 'wrong.ts';
+    plan.targets[0].symbol = 'wrong';
+    plan.targets[0].sourceHash = 'wrong';
+    plan.targets[0].executionMode = 'NATIVE_DIRECT';
+
+    const anchored = anchorStructuredUnitPlan(plan, context());
+
+    expect(anchored.project).toEqual({ name: 'shop', root: '/project', testFramework: 'vitest' });
+    expect(anchored.targets[0]).toEqual(expect.objectContaining({
+      sourceFile: 'src/discount.ts', symbol: 'applyDiscount', sourceHash: 'hash-123',
+      executionMode: 'NATIVE_WITH_MOCKS',
+    }));
+    expect(anchored.targets[0].testCases).toEqual(plan.targets[0].testCases);
+    expect(validateStructuredUnitPlan(anchored, context())).toEqual([]);
+  });
+
+  it('validates method inputs separately from class constructor inputs', () => {
+    const ctx = context();
+    ctx.targets[0] = {
+      ...ctx.targets[0],
+      id: 'src/discount.ts#DiscountService.apply',
+      symbol: 'DiscountService.apply',
+      kind: 'class-method',
+      async: true,
+      parameters: [{ name: 'total', type: 'number', optional: false }],
+      returnType: 'Promise<number>',
+      classMethod: {
+        className: 'DiscountService', methodName: 'apply', static: false,
+        constructorParameters: [{ name: 'rate', type: 'number', optional: false }],
+      },
+    };
+    const plan = validPlan();
+    plan.targets[0].symbol = 'DiscountService.apply';
+    plan.targets[0].testCases.forEach(testCase => {
+      testCase.inputs = { total: 100 };
+      testCase.constructorInputs = { rate: 0.1 };
+      testCase.expected = { kind: 'resolve', value: 90 };
+    });
+
+    expect(validateStructuredUnitPlan(plan, ctx)).toEqual([]);
+    delete plan.targets[0].testCases[0].constructorInputs;
+    expect(validateStructuredUnitPlan(plan, ctx).map(issue => issue.code))
+      .toContain('MISSING_REQUIRED_CONSTRUCTOR_INPUT');
   });
 });

@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import * as ts from 'typescript';
 import { buildSupportingContext } from './supporting-context.js';
+import { classifyUnitTarget } from './testability-classifier.js';
 import type {
   UnitBranch,
   UnitCodeIndex,
@@ -10,6 +11,7 @@ import type {
   UnitExecutionMode,
   UnitParameter,
   UnitProjectManifest,
+  UnitSupportingContext,
   UnitTarget,
 } from './schema.js';
 
@@ -73,6 +75,7 @@ function classifyBoundary(moduleName: string): UnitDependency['boundary'] {
   if (/(repository|database|\bdb\b|prisma|sequelize|typeorm|mongoose|redis)/.test(normalized)) return 'database';
   if (/(axios|fetch|http|api|graphql|email|mailer|sms|queue|playwright|puppeteer|selenium|openai|groq|anthropic|gemini)/.test(normalized)) return 'network';
   if (/^(?:node:)?fs(?:\/|\s|$)|filesystem/.test(normalized)) return 'filesystem';
+  if (/^(?:node:)?(?:child_process|worker_threads)(?:\/|\s|$)|\bexecsync\b|\bspawn(?:sync)?\b/.test(normalized)) return 'process';
   if (/(date|clock|time|random|uuid|nanoid)/.test(normalized)) return 'time-random';
   if (/(react|vue|angular|next|nuxt|nestjs|express|fastify)/.test(normalized)) return 'framework';
   return 'internal';
@@ -112,12 +115,13 @@ function importsForFile(source: ts.SourceFile, root: string, relativeFile: strin
 function dependenciesForTarget(
   rootImports: ImportInfo[],
   reachableImports: UnitTarget['supportingContext']['reachableImports'],
+  evidenceCode = '',
 ): UnitDependency[] {
   const aggregated = new Map<string, ImportInfo>();
   for (const item of reachableImports) {
     const key = item.resolvedFile || item.module;
     const existing = aggregated.get(key);
-    const importedNames = item.importedNames.filter(name => name !== '*' && name !== 'default');
+    const importedNames = item.importedNames.filter(name => name !== '*');
     aggregated.set(key, {
       module: item.module,
       importedNames: [...new Set([...(existing?.importedNames || []), ...importedNames])],
@@ -131,15 +135,35 @@ function dependenciesForTarget(
   for (const item of rootImports.filter(candidate => candidate.importedNames.length === 0)) {
     aggregated.set(item.resolvedFile || item.module, item);
   }
-  return [...aggregated.values()]
+  const dependencies: UnitDependency[] = [...aggregated.values()]
     .map(item => {
       const needsNativeEnvironment = item.boundary === 'framework';
       const needsMock = item.boundary !== 'internal' && !needsNativeEnvironment;
       return {
         ...item,
         strategy: needsNativeEnvironment ? 'native-environment' : needsMock ? 'mock' : 'real',
+        mockKind: needsMock ? 'module' : undefined,
       };
     });
+  const addGlobal = (module: string, globalName: string, boundary: UnitDependency['boundary']) => {
+    if (dependencies.some(dependency => dependency.module === module)) return;
+    dependencies.push({
+      module, importedNames: [globalName], external: true, boundary,
+      strategy: 'mock', mockKind: 'global', globalName,
+    });
+  };
+  if (/\bfetch\s*\(/.test(evidenceCode)) addGlobal('globalThis.fetch', 'fetch', 'network');
+  if (/\bDate\.now\s*\(/.test(evidenceCode)) addGlobal('Date.now', 'Date.now', 'time-random');
+  if (/\bMath\.random\s*\(/.test(evidenceCode)) addGlobal('Math.random', 'Math.random', 'time-random');
+  return dependencies;
+}
+
+function dependencyEvidence(rawCode: string, supportingContext: UnitSupportingContext): string {
+  return [
+    rawCode,
+    ...supportingContext.helperDefinitions.map(definition => definition.code),
+    ...supportingContext.constantDefinitions.map(definition => definition.code),
+  ].join('\n');
 }
 
 function nodeLine(source: ts.SourceFile, node: ts.Node): number {
@@ -182,8 +206,16 @@ function branchesForNode(target: ts.Node, source: ts.SourceFile): UnitBranch[] {
         });
       }
     } else if (ts.isCatchClause(node)) {
+      const base = `B${String(counter++).padStart(3, '0')}`;
       branches.push({
-        id: `B${String(counter++).padStart(3, '0')}_CATCH`,
+        id: `${base}_TRY`,
+        kind: 'catch',
+        condition: 'try block completes without exception',
+        outcome: 'success path continues',
+        line: nodeLine(source, node.parent),
+      });
+      branches.push({
+        id: `${base}_CATCH`,
         kind: 'catch',
         condition: 'exception thrown in try block',
         outcome: 'catch handler',
@@ -219,6 +251,39 @@ function parametersOf(node: ts.FunctionLikeDeclarationBase, source: ts.SourceFil
   }));
 }
 
+function methodNameOf(method: ts.MethodDeclaration): string | undefined {
+  if (ts.isIdentifier(method.name) || ts.isStringLiteralLike(method.name)) return method.name.text;
+  return undefined;
+}
+
+function isPublicMethod(method: ts.MethodDeclaration): boolean {
+  const modifiers = ts.canHaveModifiers(method) ? ts.getModifiers(method) : undefined;
+  return !modifiers?.some(modifier =>
+    modifier.kind === ts.SyntaxKind.PrivateKeyword
+    || modifier.kind === ts.SyntaxKind.ProtectedKeyword
+    || modifier.kind === ts.SyntaxKind.AbstractKeyword,
+  );
+}
+
+function mergeSupportingContexts(...contexts: UnitSupportingContext[]): UnitSupportingContext {
+  const unique = <T>(items: T[], key: (item: T) => string) =>
+    [...new Map(items.map(item => [key(item), item])).values()];
+  return {
+    callGraph: unique(contexts.flatMap(context => context.callGraph), item =>
+      `${item.caller}#${item.callee}#${item.sourceFile}#${item.resolution}`),
+    helperDefinitions: unique(contexts.flatMap(context => context.helperDefinitions), item =>
+      `${item.sourceFile}#${item.symbol}#${item.kind}`),
+    typeDefinitions: unique(contexts.flatMap(context => context.typeDefinitions), item =>
+      `${item.sourceFile}#${item.symbol}#${item.kind}`),
+    constantDefinitions: unique(contexts.flatMap(context => context.constantDefinitions), item =>
+      `${item.sourceFile}#${item.symbol}#${item.kind}`),
+    reachableImports: unique(contexts.flatMap(context => context.reachableImports), item =>
+      `${item.sourceFile}#${item.module}`),
+    unresolvedSymbols: [...new Set(contexts.flatMap(context => context.unresolvedSymbols))].sort(),
+    truncated: contexts.some(context => context.truncated),
+  };
+}
+
 function classifyExecution(
   relativeFile: string,
   exported: boolean,
@@ -244,6 +309,27 @@ function classifyExecution(
 
 function targetId(relativeFile: string, symbol: string): string {
   return `${relativeFile}#${symbol}`;
+}
+
+function profiledTarget(
+  target: Omit<UnitTarget, 'profile' | 'runtimeEnvironment' | 'profileReasons'>,
+): UnitTarget {
+  const classification = classifyUnitTarget({
+    sourceFile: target.sourceFile,
+    symbol: target.symbol,
+    kind: target.kind,
+    exported: target.exported,
+    rawCode: target.rawCode,
+    dependencies: target.dependencies,
+    unsupportedReasons: target.unsupportedReasons,
+    executionMode: target.executionMode,
+  });
+  return {
+    ...target,
+    profile: classification.profile,
+    runtimeEnvironment: classification.runtimeEnvironment,
+    profileReasons: classification.reasons,
+  };
 }
 
 export function buildUnitCodeIndex(manifest: UnitProjectManifest): UnitCodeIndex {
@@ -273,9 +359,11 @@ export function buildUnitCodeIndex(manifest: UnitProjectManifest): UnitCodeIndex
         const exported = isExported(statement) || exportInfo.named.has(symbol);
         const defaultExport = hasModifier(statement, ts.SyntaxKind.DefaultKeyword) || exportInfo.defaultName === symbol;
         const supportingContext = buildSupportingContext(manifest.projectRoot, relativeFile, symbol);
-        const dependencies = dependenciesForTarget(imports, supportingContext.reachableImports);
+        const dependencies = dependenciesForTarget(
+          imports, supportingContext.reachableImports, dependencyEvidence(rawCode, supportingContext),
+        );
         const classification = classifyExecution(relativeFile, exported, 'function', dependencies, rawCode);
-        targets.push({
+        targets.push(profiledTarget({
           id: targetId(relativeFile, symbol), sourceFile: relativeFile, sourceHash: fileHash,
           symbol, kind: 'function', exported,
           defaultExport,
@@ -284,7 +372,7 @@ export function buildUnitCodeIndex(manifest: UnitProjectManifest): UnitCodeIndex
           startLine: nodeLine(source, statement), endLine: source.getLineAndCharacterOfPosition(statement.end).line + 1,
           rawCode, dependencies, supportingContext, branches: branchesForNode(statement, source),
           executionMode: classification.mode, unsupportedReasons: classification.reasons,
-        });
+        }));
       }
 
       if (ts.isVariableStatement(statement)) {
@@ -296,9 +384,11 @@ export function buildUnitCodeIndex(manifest: UnitProjectManifest): UnitCodeIndex
           const exported = isExported(statement) || exportInfo.named.has(declaration.name.text);
           const defaultExport = exportInfo.defaultName === declaration.name.text;
           const supportingContext = buildSupportingContext(manifest.projectRoot, relativeFile, declaration.name.text);
-          const dependencies = dependenciesForTarget(imports, supportingContext.reachableImports);
+          const dependencies = dependenciesForTarget(
+            imports, supportingContext.reachableImports, dependencyEvidence(rawCode, supportingContext),
+          );
           const classification = classifyExecution(relativeFile, exported, 'function', dependencies, rawCode);
-          targets.push({
+          targets.push(profiledTarget({
             id: targetId(relativeFile, declaration.name.text), sourceFile: relativeFile, sourceHash: fileHash,
             symbol: declaration.name.text, kind: 'function', exported,
             defaultExport, async: hasModifier(declaration.initializer, ts.SyntaxKind.AsyncKeyword),
@@ -306,28 +396,52 @@ export function buildUnitCodeIndex(manifest: UnitProjectManifest): UnitCodeIndex
             startLine: nodeLine(source, statement), endLine: source.getLineAndCharacterOfPosition(statement.end).line + 1,
             rawCode, dependencies, supportingContext, branches: branchesForNode(declaration.initializer, source),
             executionMode: classification.mode, unsupportedReasons: classification.reasons,
-          });
+          }));
         }
       }
 
       if (ts.isClassDeclaration(statement) && (statement.name || hasModifier(statement, ts.SyntaxKind.DefaultKeyword))) {
         const symbol = statement.name?.text || 'default';
-        const originalRawCode = statement.getText(source);
-        const rawCode = redactPotentialSecrets(originalRawCode);
         const exported = isExported(statement) || exportInfo.named.has(symbol);
         const defaultExport = hasModifier(statement, ts.SyntaxKind.DefaultKeyword) || exportInfo.defaultName === symbol;
-        const supportingContext = buildSupportingContext(manifest.projectRoot, relativeFile, symbol);
-        const dependencies = dependenciesForTarget(imports, supportingContext.reachableImports);
-        const classification = classifyExecution(relativeFile, exported, 'class', dependencies, rawCode);
-        targets.push({
-          id: targetId(relativeFile, symbol), sourceFile: relativeFile, sourceHash: fileHash,
-          symbol, kind: 'class', exported,
-          defaultExport, async: false,
-          parameters: [], returnType: symbol,
-          startLine: nodeLine(source, statement), endLine: source.getLineAndCharacterOfPosition(statement.end).line + 1,
-          rawCode, dependencies, supportingContext, branches: branchesForNode(statement, source),
-          executionMode: classification.mode, unsupportedReasons: classification.reasons,
-        });
+        const constructor = statement.members.find(ts.isConstructorDeclaration);
+        const constructorParameters = constructor ? parametersOf(constructor, source) : [];
+        const constructorCode = constructor ? redactPotentialSecrets(constructor.getText(source)) : undefined;
+        const constructorContext = constructor
+          ? buildSupportingContext(manifest.projectRoot, relativeFile, symbol, 'constructor')
+          : undefined;
+        for (const member of statement.members) {
+          if (!ts.isMethodDeclaration(member) || !isPublicMethod(member)) continue;
+          const methodName = methodNameOf(member);
+          if (!methodName) continue;
+          const targetSymbol = `${symbol}.${methodName}`;
+          const rawCode = redactPotentialSecrets(member.getText(source));
+          const methodContext = buildSupportingContext(manifest.projectRoot, relativeFile, symbol, methodName);
+          const supportingContext = constructorContext
+            ? mergeSupportingContexts(methodContext, constructorContext)
+            : methodContext;
+          const dependencies = dependenciesForTarget(
+            imports, supportingContext.reachableImports, dependencyEvidence(rawCode, supportingContext),
+          );
+          const classification = classifyExecution(relativeFile, exported, 'class-method', dependencies, rawCode);
+          const modifiers = ts.canHaveModifiers(member) ? ts.getModifiers(member) : undefined;
+          targets.push(profiledTarget({
+            id: targetId(relativeFile, targetSymbol), sourceFile: relativeFile, sourceHash: fileHash,
+            symbol: targetSymbol, kind: 'class-method', exported,
+            defaultExport, async: hasModifier(member, ts.SyntaxKind.AsyncKeyword),
+            parameters: parametersOf(member, source), returnType: member.type?.getText(source) || 'inferred',
+            classMethod: {
+              className: symbol,
+              methodName,
+              static: Boolean(modifiers?.some(modifier => modifier.kind === ts.SyntaxKind.StaticKeyword)),
+              constructorParameters,
+              constructorCode,
+            },
+            startLine: nodeLine(source, member), endLine: source.getLineAndCharacterOfPosition(member.end).line + 1,
+            rawCode, dependencies, supportingContext, branches: branchesForNode(member, source),
+            executionMode: classification.mode, unsupportedReasons: classification.reasons,
+          }));
+        }
       }
     }
   }

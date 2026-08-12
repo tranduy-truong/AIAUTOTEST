@@ -2,7 +2,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { resolveUnitRunnerInvocation } from '../../src/core/unit/runner.js';
+import { buildUnitRunnerArgs, resolveUnitRunnerInvocation } from '../../src/core/unit/runner.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -57,5 +57,20 @@ describe('Unit runner invocation', () => {
 
     expect(() => resolveUnitRunnerInvocation(shim, 'vitest', 'win32', 'node.exe'))
       .toThrow('Không tìm thấy JavaScript CLI của vitest');
+  });
+
+  it('forces machine-readable JSON coverage reporters for feedback analysis', () => {
+    expect(buildUnitRunnerArgs('vitest', ['tests/unit/a.test.ts'], true)).toEqual([
+      'run', 'tests/unit/a.test.ts', '--coverage',
+      '--coverage.reporter=json', '--coverage.reporter=json-summary',
+      '--coverage.thresholds.perFile=false',
+      '--coverage.thresholds.lines=0', '--coverage.thresholds.functions=0',
+      '--coverage.thresholds.branches=0', '--coverage.thresholds.statements=0',
+    ]);
+    expect(buildUnitRunnerArgs('jest', ['tests/unit/a.test.ts'], true)).toEqual([
+      'tests/unit/a.test.ts', '--coverage',
+      '--coverageReporters=json', '--coverageReporters=json-summary',
+      '--coverageThreshold={"global":{"branches":0,"functions":0,"lines":0,"statements":0}}',
+    ]);
   });
 });

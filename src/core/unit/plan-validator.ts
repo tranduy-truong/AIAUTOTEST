@@ -68,6 +68,48 @@ export function parseStructuredUnitPlan(raw: string): StructuredUnitPlan | null 
   }
 }
 
+/**
+ * Re-anchor fields owned by Code Reader instead of asking the LLM to copy
+ * hashes, project identity and execution policy perfectly. Test intent,
+ * inputs, branches, mocks and expected results remain untouched and are still
+ * validated strictly.
+ */
+export function anchorStructuredUnitPlan(
+  plan: StructuredUnitPlan,
+  context: UnitContextBundle,
+): StructuredUnitPlan {
+  const anchoredTargets = plan.targets.map((planTarget, index) => {
+    const exact = context.targets.find(target =>
+      target.sourceFile === planTarget.sourceFile && target.symbol === planTarget.symbol,
+    );
+    const target = exact || (context.targets.length === 1 && plan.targets.length === 1
+      ? context.targets[0]
+      : undefined);
+    if (!target) return planTarget;
+    return {
+      ...planTarget,
+      sourceFile: target.sourceFile,
+      symbol: target.symbol,
+      sourceHash: target.sourceHash,
+      executionMode: target.executionMode,
+      profile: target.profile,
+      testCases: Array.isArray(planTarget.testCases) ? planTarget.testCases : [],
+    };
+  });
+  return {
+    ...plan,
+    version: 1,
+    source: 'ai-planner',
+    project: {
+      name: context.project.projectName,
+      root: context.project.projectRoot,
+      testFramework: context.project.testFramework,
+    },
+    targets: anchoredTargets,
+    clarifications: Array.isArray(plan.clarifications) ? plan.clarifications : [],
+  };
+}
+
 function validateTarget(planTarget: UnitPlanTarget, target: UnitTarget): UnitPlanValidationIssue[] {
   const issues: UnitPlanValidationIssue[] = [];
   const targetLabel = `${target.sourceFile}#${target.symbol}`;
@@ -76,6 +118,9 @@ function validateTarget(planTarget: UnitPlanTarget, target: UnitTarget): UnitPla
   }
   if (planTarget.executionMode !== target.executionMode) {
     issues.push({ code: 'INVENTED_EXECUTION_MODE', target: targetLabel, message: 'Planner đã thay đổi executionMode do Target Classifier xác định.' });
+  }
+  if (planTarget.profile !== target.profile) {
+    issues.push({ code: 'INVENTED_TESTABILITY_PROFILE', target: targetLabel, message: 'Planner đã thay đổi profile do Testability Classifier xác định.' });
   }
   if (target.supportingContext.truncated) {
     issues.push({
@@ -113,7 +158,7 @@ function validateTarget(planTarget: UnitPlanTarget, target: UnitTarget): UnitPla
       for (const message of validateDataValue(testCase.inputs, 'inputs')) {
         issues.push({ code: 'INVALID_TEST_INPUTS', target: targetLabel, testCaseId: testCase.id, message });
       }
-      if (target.kind === 'function') {
+      if (target.kind === 'function' || target.kind === 'class-method') {
         const declaredParameters = new Map(target.parameters.map(parameter => [parameter.name, parameter]));
         for (const parameter of target.parameters.filter(item => !item.optional)) {
           if (!(parameter.name in testCase.inputs)) {
@@ -143,6 +188,38 @@ function validateTarget(planTarget: UnitPlanTarget, target: UnitTarget): UnitPla
             issues.push({
               code: 'INPUT_TYPE_MISMATCH', target: targetLabel, testCaseId: testCase.id,
               message: `Input ${inputName} không khớp type ${parameter.type}.`,
+            });
+          }
+        }
+      }
+    }
+    if (target.kind === 'class-method') {
+      const constructorInputs = testCase.constructorInputs ?? {};
+      if (!isObject(constructorInputs)) {
+        issues.push({
+          code: 'INVALID_CONSTRUCTOR_INPUTS', target: targetLabel, testCaseId: testCase.id,
+          message: 'constructorInputs phải là JSON object.',
+        });
+      } else {
+        for (const message of validateDataValue(constructorInputs, 'constructorInputs')) {
+          issues.push({ code: 'INVALID_CONSTRUCTOR_INPUTS', target: targetLabel, testCaseId: testCase.id, message });
+        }
+        const constructorParameters = new Map(
+          (target.classMethod?.constructorParameters || []).map(parameter => [parameter.name, parameter]),
+        );
+        for (const parameter of (target.classMethod?.constructorParameters || []).filter(item => !item.optional)) {
+          if (!(parameter.name in constructorInputs)) {
+            issues.push({
+              code: 'MISSING_REQUIRED_CONSTRUCTOR_INPUT', target: targetLabel, testCaseId: testCase.id,
+              message: `Thiếu constructor input bắt buộc: ${parameter.name}.`,
+            });
+          }
+        }
+        for (const inputName of Object.keys(constructorInputs)) {
+          if (!constructorParameters.has(inputName)) {
+            issues.push({
+              code: 'INVENTED_CONSTRUCTOR_INPUT', target: targetLabel, testCaseId: testCase.id,
+              message: `Constructor input không tồn tại: ${inputName}.`,
             });
           }
         }

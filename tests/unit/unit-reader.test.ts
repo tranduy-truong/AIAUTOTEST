@@ -111,4 +111,49 @@ export async function execute() {
     ]));
     expect(execute?.executionMode).toBe('NATIVE_WITH_MOCKS');
   });
+
+  it('splits exported classes into method-level targets with independent async/input/dependency contracts', () => {
+    const root = createProject();
+    const file = path.join(root, 'src', 'adapter.ts');
+    fs.writeFileSync(file, `
+import { execSync } from 'child_process';
+import fs from 'fs';
+
+export class Adapter {
+  constructor(private model = 'default') {}
+  async isAvailable(): Promise<boolean> {
+    try { execSync('tool --version'); return true; } catch { return false; }
+  }
+  async run(opts: { promptDir: string }): Promise<string> {
+    return fs.existsSync(opts.promptDir) ? fs.readFileSync(opts.promptDir, 'utf8') : this.model;
+  }
+  private hidden() { return 'hidden'; }
+}
+`);
+
+    const analysis = analyzeUnitInput(file);
+    const available = analysis.index.targets.find(item => item.symbol === 'Adapter.isAvailable');
+    const run = analysis.index.targets.find(item => item.symbol === 'Adapter.run');
+
+    expect(analysis.index.targets.map(item => item.symbol)).toEqual([
+      'Adapter.isAvailable',
+      'Adapter.run',
+    ]);
+    expect(available).toEqual(expect.objectContaining({
+      kind: 'class-method', async: true, parameters: [], returnType: 'Promise<boolean>',
+    }));
+    expect(available?.dependencies).toEqual([
+      expect.objectContaining({ module: 'child_process', boundary: 'process', strategy: 'mock' }),
+    ]);
+    expect(available?.branches.map(branch => branch.id)).toEqual(['B001_TRY', 'B001_CATCH']);
+
+    expect(run?.parameters.map(parameter => parameter.name)).toEqual(['opts']);
+    expect(run?.classMethod).toEqual(expect.objectContaining({
+      className: 'Adapter', methodName: 'run', static: false,
+      constructorParameters: [expect.objectContaining({ name: 'model', optional: true })],
+    }));
+    expect(run?.dependencies).toEqual([
+      expect.objectContaining({ module: 'fs', boundary: 'filesystem', strategy: 'mock' }),
+    ]);
+  });
 });

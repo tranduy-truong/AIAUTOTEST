@@ -12,6 +12,7 @@ import { buildActionPlan } from "./core/action-plan.js";
 import { buildCompactDomReport, runLive } from "./agents/crawler/live-runner.js";
 import { analyzeUnitInput, createUnitSession } from "./core/unit/artifacts.js";
 import { runLastGeneratedUnitTests } from "./core/unit/runner.js";
+import { runUnitCoverageGuidedLoop } from "./agents/planner/unit-coverage-loop.js";
 
 const harness = new TestPolicyHarness();
 
@@ -405,6 +406,13 @@ async function runTests(level) {
       console.log(unitResult.coverageEnabled
         ? "Coverage đã được bật và lưu trong dự án đích."
         : "Test pass nhưng chưa đo coverage vì dự án đích chưa có coverage provider.");
+      const coverageLoop = await runUnitCoverageGuidedLoop(unitResult);
+      unitResult = coverageLoop.finalRun;
+      if (coverageLoop.status === "TARGET_REACHED") {
+        console.log("Coverage đã đạt ngưỡng 80% cho các target được đo.");
+      } else if (coverageLoop.rounds.length > 0) {
+        console.log(`Coverage loop kết thúc với trạng thái ${coverageLoop.status} sau ${coverageLoop.rounds.length} vòng.`);
+      }
     } else {
       const errorMessage = `${unitResult.stdout}\n${unitResult.stderr}`.trim();
       console.log("\nUnit Test failed. Healer chỉ chẩn đoán, không tự đổi Expected Result.");

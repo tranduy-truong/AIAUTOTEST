@@ -1,11 +1,23 @@
 export type UnitTestFramework = 'vitest' | 'jest' | 'unknown';
 export type UnitLanguage = 'typescript' | 'javascript' | 'mixed' | 'unknown';
-export type UnitTargetKind = 'function' | 'class';
+export type UnitTargetKind = 'function' | 'class' | 'class-method';
 export type UnitExecutionMode =
   | 'NATIVE_DIRECT'
   | 'NATIVE_WITH_MOCKS'
   | 'NATIVE_REQUIRED'
   | 'UNSUPPORTED';
+
+export type UnitTestabilityProfile =
+  | 'UNIT_NATIVE'
+  | 'UNIT_MOCKED'
+  | 'COMPONENT_DOM'
+  | 'INTEGRATION_SANDBOX'
+  | 'PROCESS_SANDBOX'
+  | 'ENTRYPOINT_SMOKE'
+  | 'NO_RUNTIME_TEST'
+  | 'REFACTOR_REQUIRED';
+
+export type UnitRuntimeEnvironment = 'node' | 'jsdom' | 'browser' | 'integration' | 'none';
 
 export interface UnitProjectManifest {
   version: 1;
@@ -28,10 +40,13 @@ export interface UnitDependency {
     | 'database'
     | 'network'
     | 'filesystem'
+    | 'process'
     | 'time-random'
     | 'framework'
     | 'internal';
   strategy: 'real' | 'mock' | 'native-environment';
+  mockKind?: 'module' | 'global';
+  globalName?: string;
   resolvedFile?: string;
 }
 
@@ -47,6 +62,14 @@ export interface UnitParameter {
   name: string;
   type: string;
   optional: boolean;
+}
+
+export interface UnitClassMethodContext {
+  className: string;
+  methodName: string;
+  static: boolean;
+  constructorParameters: UnitParameter[];
+  constructorCode?: string;
 }
 
 export interface UnitSupportingDefinition {
@@ -92,6 +115,7 @@ export interface UnitTarget {
   async: boolean;
   parameters: UnitParameter[];
   returnType: string;
+  classMethod?: UnitClassMethodContext;
   startLine: number;
   endLine: number;
   rawCode: string;
@@ -99,7 +123,47 @@ export interface UnitTarget {
   supportingContext: UnitSupportingContext;
   branches: UnitBranch[];
   executionMode: UnitExecutionMode;
+  profile: UnitTestabilityProfile;
+  runtimeEnvironment: UnitRuntimeEnvironment;
+  profileReasons: string[];
   unsupportedReasons: string[];
+}
+
+export interface UnitTestabilityEntry {
+  id: string;
+  sourceFile: string;
+  symbol?: string;
+  profile: UnitTestabilityProfile;
+  runtimeEnvironment: UnitRuntimeEnvironment;
+  selected: boolean;
+  generatable: boolean;
+  reasons: string[];
+}
+
+export interface UnitTestabilityManifest {
+  version: 1;
+  projectRoot: string;
+  generatedAt: string;
+  entries: UnitTestabilityEntry[];
+  summary: Record<UnitTestabilityProfile, number>;
+}
+
+export type UnitGenerationStatus =
+  | 'GENERATED'
+  | 'NO_RUNTIME'
+  | 'REFACTOR_REQUIRED'
+  | 'PROFILE_NOT_SUPPORTED'
+  | 'STALE_SOURCE'
+  | 'AI_GENERATION_FAILED'
+  | 'STATIC_VALIDATION_FAILED'
+  | 'TYPECHECK_FAILED';
+
+export interface UnitGenerationTargetResult {
+  target: string;
+  profile: UnitTestabilityProfile;
+  status: UnitGenerationStatus;
+  file?: string;
+  errors: string[];
 }
 
 export interface UnitCodeIndex {
@@ -165,6 +229,7 @@ export interface UnitPlannedTestCase {
   name: string;
   branchIds: string[];
   inputs: Record<string, UnitDataValue>;
+  constructorInputs?: Record<string, UnitDataValue>;
   expected: UnitExpectedResult;
   oracleSource: UnitOracleSource;
   mocks: UnitMockPlan[];
@@ -176,6 +241,7 @@ export interface UnitPlanTarget {
   symbol: string;
   sourceHash: string;
   executionMode: UnitExecutionMode;
+  profile: UnitTestabilityProfile;
   testCases: UnitPlannedTestCase[];
 }
 
@@ -202,4 +268,6 @@ export interface UnitSession {
   contextPath: string;
   planPath: string;
   generatedFiles: string[];
+  generatedTargetFiles?: Record<string, string>;
+  coverageIteration?: number;
 }

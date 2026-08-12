@@ -1,7 +1,8 @@
 import fs from 'fs';
 import path from 'path';
 import { spawnSync } from 'child_process';
-import { loadUnitSession } from './artifacts.js';
+import { loadUnitContext, loadUnitSession } from './artifacts.js';
+import { analyzeUnitCoverage } from './coverage.js';
 
 export interface UnitRunResult {
   ok: boolean;
@@ -13,6 +14,7 @@ export interface UnitRunResult {
   stdout: string;
   stderr: string;
   exitCode: number | null;
+  coverageGapReportPath?: string;
 }
 
 interface RunnerInvocation {
@@ -81,6 +83,29 @@ export function resolveUnitRunnerInvocation(
   return { executable: nodeExecutable, argsPrefix: [entryPoint] };
 }
 
+export function buildUnitRunnerArgs(
+  framework: 'vitest' | 'jest',
+  relativeFiles: string[],
+  coverageEnabled: boolean,
+): string[] {
+  if (framework === 'vitest') {
+    return ['run', ...relativeFiles, ...(coverageEnabled
+      ? [
+          '--coverage', '--coverage.reporter=json', '--coverage.reporter=json-summary',
+          '--coverage.thresholds.perFile=false',
+          '--coverage.thresholds.lines=0', '--coverage.thresholds.functions=0',
+          '--coverage.thresholds.branches=0', '--coverage.thresholds.statements=0',
+        ]
+      : [])];
+  }
+  return [...relativeFiles, ...(coverageEnabled
+    ? [
+        '--coverage', '--coverageReporters=json', '--coverageReporters=json-summary',
+        '--coverageThreshold={"global":{"branches":0,"functions":0,"lines":0,"statements":0}}',
+      ]
+    : [])];
+}
+
 export function runLastGeneratedUnitTests(): UnitRunResult {
   const session = loadUnitSession();
   const generatedFiles = session.generatedFiles.filter(file => fs.existsSync(file));
@@ -127,9 +152,7 @@ export function runLastGeneratedUnitTests(): UnitRunResult {
       exitCode: null,
     };
   }
-  const frameworkArgs = session.testFramework === 'vitest'
-    ? ['run', ...relativeFiles, ...(coverageEnabled ? ['--coverage'] : [])]
-    : [...relativeFiles, ...(coverageEnabled ? ['--coverage'] : [])];
+  const frameworkArgs = buildUnitRunnerArgs(session.testFramework, relativeFiles, coverageEnabled);
   let invocation: RunnerInvocation;
   try {
     invocation = resolveUnitRunnerInvocation(executable, session.testFramework);
@@ -169,14 +192,17 @@ export function runLastGeneratedUnitTests(): UnitRunResult {
     path.join(session.runDirectory, 'test-results.json'),
     `${JSON.stringify({ ...runResult, ranAt: new Date().toISOString() }, null, 2)}\n`,
   );
-  const coverageCandidates = [
-    path.join(session.projectRoot, 'coverage', 'coverage-summary.json'),
-    path.join(session.projectRoot, 'coverage', 'coverage-final.json'),
-  ];
+  const coverageCandidates = [path.join(session.projectRoot, 'coverage', 'coverage-final.json')];
   const coverageFile = coverageCandidates.find(file => fs.existsSync(file));
-  fs.writeFileSync(
-    path.join(session.runDirectory, 'coverage-gaps.json'),
-    `${JSON.stringify({
+  const coverageGapReportPath = path.join(session.runDirectory, 'coverage-gaps.json');
+  const coverageArtifact = coverageFile
+    ? analyzeUnitCoverage({
+        projectRoot: session.projectRoot,
+        coverageFile,
+        targets: loadUnitContext(session).targets,
+        threshold: 80,
+      })
+    : {
       version: 1,
       coverageEnabled,
       coverageFile: coverageFile || null,
@@ -184,9 +210,10 @@ export function runLastGeneratedUnitTests(): UnitRunResult {
         ? coverageFile ? 'COVERAGE_AVAILABLE' : 'COVERAGE_REPORT_NOT_FOUND'
         : 'COVERAGE_PLUGIN_NOT_INSTALLED',
       note: coverageEnabled
-        ? 'Coverage được giữ trong dự án đích; vòng bổ sung branch sẽ đọc report này ở giai đoạn tiếp theo.'
+        ? 'Runner đã yêu cầu JSON reporter nhưng chưa tìm thấy coverage-final.json.'
         : 'Test vẫn được chạy, nhưng cần cài coverage provider tương ứng để đo coverage.',
-    }, null, 2)}\n`,
-  );
+    };
+  fs.writeFileSync(coverageGapReportPath, `${JSON.stringify(coverageArtifact, null, 2)}\n`);
+  runResult.coverageGapReportPath = coverageGapReportPath;
   return runResult;
 }

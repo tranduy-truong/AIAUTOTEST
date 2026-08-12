@@ -83,12 +83,15 @@ Kiến trúc công khai vẫn là **Planner → Generator → Healer**. Code Rea
 ### Phạm vi phiên bản hiện tại
 
 - Dự án JavaScript/TypeScript đã cấu hình Vitest hoặc Jest.
-- Hàm, arrow function và class được `export`.
+- Hàm/arrow function được `export`; class export được tách thành từng public method để mỗi target có đúng async/input/branch/dependency riêng.
 - Phân tích `if/else`, ternary, `switch`, `catch` và vòng lặp bằng TypeScript AST.
-- Phân loại dependency database/API/filesystem/time để Generator mock đúng ranh giới.
+- Phân loại dependency database/API/filesystem/process/time và global `fetch` để Generator mock đúng ranh giới.
+- Testability Classifier gán một trong 8 profile cho từng target: `UNIT_NATIVE`, `UNIT_MOCKED`, `COMPONENT_DOM`, `INTEGRATION_SANDBOX`, `PROCESS_SANDBOX`, `ENTRYPOINT_SMOKE`, `NO_RUNTIME_TEST`, `REFACTOR_REQUIRED`.
 - Dựng call graph/type graph có giới hạn để cung cấp đúng helper, constant và interface reachable; không kéo dependency của hàm không liên quan.
 - Test sinh tại `<du-an-dich>/tests/unit/ai-generated/` và luôn import source thật.
 - File sinh phải qua static contract và TypeScript preflight; phiên chạy chỉ giữ file của lần Generator thành công gần nhất.
+- Generator dung lỗi theo target: một target lỗi/không có sandbox không chặn các target hợp lệ khác; trạng thái được ghi riêng trong `generation-manifest.json` và `untestable-targets.json`.
+- Khi dự án có coverage provider, runner ép xuất `coverage-final.json`, ánh xạ gap về branch ID/dòng nguồn và chạy tối đa 3 vòng Planner → Generator bổ sung. Vòng lặp dừng nếu coverage không tăng; đặt `UNIT_COVERAGE_LOOP=0` để tắt.
 - Healer Unit chạy theo chính sách `diagnose-only`: không đổi expected, không sửa source sản phẩm và không skip test.
 
 ### Cách dùng
@@ -96,7 +99,7 @@ Kiến trúc công khai vẫn là **Planner → Generator → Healer**. Code Rea
 1. Chạy `npm start`.
 2. Chọn `AI Lên kế hoạch & Sinh Code Test` → `Unit`.
 3. Chọn thư mục dự án, một file nguồn hoặc dán một đoạn code có `export`.
-4. Chọn hàm/class cần test và nhập requirement nếu có.
+4. Chọn hàm hoặc `Class.method` cần test và nhập requirement nếu có.
 5. Planner lập kế hoạch cho từng target; Generator chỉ chạy khi JSON vượt qua validator.
 6. Chọn `Chạy kiểm thử Unit Test` ở menu để chạy các file gần nhất trong đúng thư mục dự án đích.
 
@@ -107,6 +110,8 @@ TestKit không tự cài Vitest/Jest và không gửi `.env`, secret key, test c
 ```text
 artifacts/unit/<project>/<yyyyMMdd_HHmmss_SSS>/
 ├── project-manifest.json
+├── testability-manifest.json
+├── target-partitions.json
 ├── code-index.json
 ├── branch-map.json
 ├── dependency-map.json
@@ -117,7 +122,11 @@ artifacts/unit/<project>/<yyyyMMdd_HHmmss_SSS>/
 ├── generation-manifest.json
 ├── test-results.json
 ├── coverage-gaps.json
+├── coverage-loop.json
+├── untestable-targets.json
 └── healer-diagnosis.json
 ```
 
 JSON là hợp đồng cho chương trình; Markdown là bản trình bày để tester đọc. `supporting-context.json` chứa call graph, helper, type và constant thật sự liên quan đến target. `sourceHash` chặn Generator nếu target hoặc supporting source đã thay đổi sau khi Planner lập kế hoạch.
+
+`INTEGRATION_SANDBOX` và `ENTRYPOINT_SMOKE` hiện được inventory nhưng chỉ sinh khi dự án khai báo sandbox/startup harness an toàn; hệ thống không tự kết nối database thật hoặc khởi động server thật. `NO_RUNTIME_TEST` là kết quả hợp lệ cho file chỉ chứa type/interface/constant tĩnh, không phải lỗi bị bỏ sót.

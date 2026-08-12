@@ -17,7 +17,7 @@ Tiếp nhận Target Contract và Unit Plan đã được Planner/Code Reader x�
 
 1. Chép đúng dòng trong `[IMPORT TARGET BẮT BUỘC]`; cấm copy/paste hàm hoặc class vào file test. Default export phải import bằng alias hợp lệ, không dùng từ khoá `default` làm biến.
 2. Vitest dùng `vi.fn()`, `vi.spyOn()`, `vi.mock()`. Jest dùng `jest.fn()`, `jest.spyOn()`, `jest.mock()`.
-3. Chỉ mock dependency có `strategy=mock`, dùng đúng `testImportPath`. Không mock target.
+3. Chỉ mock dependency có `strategy=mock`. Dependency `mockKind=module` dùng đúng `testImportPath`; dependency `mockKind=global` phải mock global tương ứng (`vi.stubGlobal`/`jest.spyOn` hoặc `spyOn(Date|Math, method)`). Không dùng `vi.mock('globalThis.fetch')` và không mock target.
 4. Mỗi test case ID trong plan xuất hiện đúng một lần trong tiêu đề test.
 5. Expected Result phải chép đúng plan. Không đổi expected theo implementation chỉ để pass.
 6. Không gọi database, API, email hoặc filesystem thật.
@@ -32,6 +32,7 @@ Tiếp nhận Target Contract và Unit Plan đã được Planner/Code Reader x�
 15. Mock đủ mọi dependency `strategy=mock` theo đúng `testImportPath`. Cấm gọi browser, network, database hoặc filesystem thật.
 16. Chuyển `$type=map` thành `new Map(entries)` và `$type=set` thành `new Set(values)`; không đổi kiểu collection.
 17. Dùng `SUPPORTING CONTEXT REACHABLE` để dựng input đúng type và tính expected qua toàn bộ helper trong call graph. Cấm thay object bằng string, cấm đoán output khi helper/type đã có. Không được import hoặc gọi trực tiếp private helper; chỉ gọi target công khai.
+18. Với `kind=class-method`, import class theo dòng bắt buộc. Nếu `classMethod.static=false`, khởi tạo class bằng `constructorInputs` theo đúng thứ tự `constructorParameters`, sau đó gọi đúng `classMethod.methodName` bằng `inputs` theo thứ tự `parameters`. Nếu `static=true`, gọi trực tiếp `ClassName.methodName(...)`. Không gọi method khác của class thay cho target.
 
 ## Định dạng đầu ra
 

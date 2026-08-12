@@ -81,7 +81,7 @@ describe('Structured Unit Plan validator', () => {
       name: 'initializes exported module metadata',
       branchIds: [],
       inputs: { total: 100 },
-      expected: { kind: 'side-effect', calls: [] },
+      expected: { kind: 'return', value: 100 },
       oracleSource: 'type-contract',
       mocks: [{ module: './db', symbol: 'db', behavior: { kind: 'return', value: null } }],
     });

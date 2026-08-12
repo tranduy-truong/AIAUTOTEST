@@ -157,6 +157,7 @@ export type UnitGenerationStatus =
   | 'REFACTOR_REQUIRED'
   | 'PROFILE_NOT_SUPPORTED'
   | 'STALE_SOURCE'
+  | 'NEEDS_ORACLE'
   | 'AI_GENERATION_FAILED'
   | 'STATIC_VALIDATION_FAILED'
   | 'TYPECHECK_FAILED';
@@ -202,6 +203,33 @@ export type UnitOracleSource =
   | 'existing-test'
   | 'implementation';
 
+export type UnitOracleEvidenceStatus = 'verified' | 'proposed' | 'observed';
+
+export type UnitOracleEvidenceSource =
+  | 'requirement'
+  | 'existing-test'
+  | 'return-literal'
+  | 'throw-literal'
+  | 'pure-evaluation'
+  | 'sandbox-observation'
+  | 'ai-inference';
+
+/**
+ * Machine-checkable provenance for an expected result. A Planner proposal is
+ * deliberately not equivalent to verified evidence.
+ */
+export interface UnitOracleEvidence {
+  status: UnitOracleEvidenceStatus;
+  source: UnitOracleEvidenceSource;
+  /** Exact excerpt/reference that must be present in tester requirements. */
+  reference?: string;
+  sourceFile?: string;
+  line?: number;
+  expression?: string;
+  testFile?: string;
+  testCaseId?: string;
+}
+
 export type UnitDataValue =
   | null
   | boolean
@@ -225,7 +253,16 @@ export type UnitDataValue =
 export interface UnitExpectedResult {
   kind: 'return' | 'throw' | 'resolve' | 'reject' | 'side-effect';
   value?: UnitDataValue;
+  /** @deprecated Use error.message for throw/reject. Kept for old plans. */
   message?: string;
+  error?: {
+    className?: 'Error' | 'TypeError' | 'RangeError' | 'SyntaxError' | 'ReferenceError';
+    message?: {
+      match: 'equals' | 'contains' | 'regexp';
+      value: string;
+      flags?: string;
+    };
+  };
   calls?: Array<{
     dependency: string;
     method?: string;
@@ -263,6 +300,7 @@ export interface UnitPlannedTestCase {
   constructorInputs?: Record<string, UnitDataValue>;
   expected: UnitExpectedResult;
   oracleSource: UnitOracleSource;
+  oracleEvidence?: UnitOracleEvidence;
   mocks: UnitMockPlan[];
   notes?: string[];
 }

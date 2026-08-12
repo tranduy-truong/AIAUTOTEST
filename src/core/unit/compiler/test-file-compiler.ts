@@ -82,27 +82,75 @@ function compilePrimaryAssertion(
   if ((expected.kind === 'return' || expected.kind === 'resolve') && expected.value === undefined) {
     return { needsOracle: `${expected.kind} cần expected.value có bằng chứng.` };
   }
-  if ((expected.kind === 'throw' || expected.kind === 'reject') && expected.message === undefined && expected.value === undefined) {
-    return { needsOracle: `${expected.kind} cần message hoặc value có bằng chứng.` };
+  if ((expected.kind === 'throw' || expected.kind === 'reject')
+    && expected.message === undefined && expected.value === undefined && expected.error === undefined) {
+    return { needsOracle: `${expected.kind} cần error matcher hoặc value có bằng chứng.` };
   }
   if (expected.kind === 'side-effect') return { statements: [] };
   if (expected.kind === 'return') {
     return { statements: [expectCall(invocationExpression, 'toEqual', [compileDataValue(expected.value!)])] };
   }
-  if (expected.kind === 'throw') {
-    const thunk = f.createArrowFunction(undefined, undefined, [], undefined,
-      f.createToken(ts.SyntaxKind.EqualsGreaterThanToken), invocationExpression);
-    const argument = expected.message !== undefined
-      ? f.createStringLiteral(expected.message)
-      : compileDataValue(expected.value!);
-    return { statements: [expectCall(thunk, 'toThrow', [argument])] };
+  if (expected.kind === 'throw' || expected.kind === 'reject') {
+    const caughtError = f.createIdentifier('caughtError');
+    const caughtBinding = f.createVariableStatement(undefined, f.createVariableDeclarationList([
+      f.createVariableDeclaration(caughtError, undefined, f.createKeywordTypeNode(ts.SyntaxKind.UnknownKeyword)),
+    ], ts.NodeFlags.Let));
+    const execute = f.createExpressionStatement(
+      expected.kind === 'reject' ? f.createAwaitExpression(invocationExpression) : invocationExpression,
+    );
+    const errorParameter = f.createVariableDeclaration(f.createIdentifier('error'));
+    const catchClause = f.createCatchClause(errorParameter, f.createBlock([
+      f.createExpressionStatement(f.createBinaryExpression(
+        caughtError, f.createToken(ts.SyntaxKind.EqualsToken), f.createIdentifier('error'),
+      )),
+    ], true));
+    const statements: ts.Statement[] = [
+      caughtBinding,
+      f.createTryStatement(f.createBlock([execute], true), catchClause, undefined),
+      expectCall(caughtError, 'toBeDefined', []),
+    ];
+    if (expected.error?.className) {
+      statements.push(expectCall(caughtError, 'toBeInstanceOf', [f.createIdentifier(expected.error.className)]));
+    }
+    const messageMatcher = expected.error?.message;
+    if (messageMatcher?.match === 'equals') {
+      statements.push(expectCall(caughtError, 'toMatchObject', [f.createObjectLiteralExpression([
+        f.createPropertyAssignment('message', f.createStringLiteral(messageMatcher.value)),
+      ])]));
+    } else if (messageMatcher?.match === 'contains') {
+      const stringContaining = f.createCallExpression(
+        f.createPropertyAccessExpression(f.createIdentifier('expect'), 'stringContaining'), undefined,
+        [f.createStringLiteral(messageMatcher.value)],
+      );
+      const objectContaining = f.createCallExpression(
+        f.createPropertyAccessExpression(f.createIdentifier('expect'), 'objectContaining'), undefined,
+        [f.createObjectLiteralExpression([f.createPropertyAssignment('message', stringContaining)])],
+      );
+      statements.push(expectCall(caughtError, 'toEqual', [objectContaining]));
+    } else if (messageMatcher?.match === 'regexp') {
+      const errorMessage = f.createPropertyAccessExpression(
+        f.createAsExpression(caughtError, f.createTypeReferenceNode('Error')), 'message',
+      );
+      statements.push(expectCall(errorMessage, 'toMatch', [
+        f.createNewExpression(f.createIdentifier('RegExp'), undefined, [
+          f.createStringLiteral(messageMatcher.value), f.createStringLiteral(messageMatcher.flags || ''),
+        ]),
+      ]));
+    } else if (expected.message !== undefined) {
+      statements.push(expectCall(caughtError, 'toMatchObject', [f.createObjectLiteralExpression([
+        f.createPropertyAssignment('message', f.createStringLiteral(expected.message)),
+      ])]));
+    } else if (expected.value !== undefined) {
+      statements.push(expectCall(caughtError, 'toEqual', [compileDataValue(expected.value)]));
+    }
+    return { statements };
   }
   const promiseExpectation = f.createPropertyAccessExpression(
     f.createCallExpression(f.createIdentifier('expect'), undefined, [invocationExpression]),
-    expected.kind === 'resolve' ? 'resolves' : 'rejects',
+    'resolves',
   );
-  const matcher = expected.kind === 'reject' && expected.message !== undefined ? 'toThrow' : 'toEqual';
-  const argument = expected.message !== undefined ? f.createStringLiteral(expected.message) : compileDataValue(expected.value!);
+  const matcher = 'toEqual';
+  const argument = compileDataValue(expected.value!);
   return { statements: [f.createExpressionStatement(f.createAwaitExpression(
     f.createCallExpression(f.createPropertyAccessExpression(promiseExpectation, matcher), undefined, [argument]),
   ))] };

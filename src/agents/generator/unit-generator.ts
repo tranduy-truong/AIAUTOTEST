@@ -3,6 +3,10 @@ import path from 'path';
 import * as ts from 'typescript';
 import { compileUnitTestFile } from '../../core/unit/compiler/test-file-compiler.js';
 import {
+  resolveTargetOracles,
+  type UnitOracleResolution,
+} from '../../core/unit/oracle/oracle-resolver.js';
+import {
   freshSourceHash,
   freshUnitFileHash,
   loadUnitContext,
@@ -11,10 +15,12 @@ import {
 } from '../../core/unit/artifacts.js';
 import type {
   StructuredUnitPlan,
+  UnitContextBundle,
   UnitDependency,
   UnitGenerationTargetResult,
   UnitPlanTarget,
   UnitTarget,
+  UnitTestCaseGenerationResult,
 } from '../../core/unit/schema.js';
 
 function profileCapability(target: UnitTarget): { supported: boolean; reason?: string } {
@@ -416,6 +422,41 @@ function updateUntestableTargets(sessionDirectory: string, results: UnitGenerati
   }, null, 2)}\n`);
 }
 
+export function prepareOracleVerifiedPlan(
+  context: Pick<UnitContextBundle, 'requirements'>,
+  target: UnitTarget,
+  planTarget: UnitPlanTarget,
+): {
+  planTarget: UnitPlanTarget;
+  resolutions: UnitOracleResolution[];
+  unresolvedCases: UnitTestCaseGenerationResult[];
+} {
+  const resolutions = resolveTargetOracles(context, target, planTarget.testCases);
+  const verifiedIds = new Set(resolutions
+    .filter(result => result.status === 'VERIFIED')
+    .map(result => result.testCaseId));
+  return {
+    resolutions,
+    planTarget: {
+      ...planTarget,
+      testCases: planTarget.testCases
+        .filter(testCase => verifiedIds.has(testCase.id))
+        .map(testCase => ({
+          ...testCase,
+          oracleEvidence: resolutions.find(result => result.testCaseId === testCase.id)?.evidence
+            || testCase.oracleEvidence,
+        })),
+    },
+    unresolvedCases: resolutions
+      .filter(result => result.status === 'NEEDS_ORACLE')
+      .map(result => ({
+        testCaseId: result.testCaseId,
+        status: 'NEEDS_ORACLE',
+        errors: result.errors,
+      })),
+  };
+}
+
 export async function runUnitGenerator(options: {
   preserveExistingFiles?: boolean;
   onlyTargetIds?: string[];
@@ -434,6 +475,7 @@ export async function runUnitGenerator(options: {
 
   const generatedFiles: string[] = [];
   const results: UnitGenerationTargetResult[] = [];
+  const oracleResults: Array<{ target: string; testCases: UnitOracleResolution[] }> = [];
   const allowedTargets = options.onlyTargetIds ? new Set(options.onlyTargetIds) : undefined;
   for (const planTarget of plan.targets.filter(item => !allowedTargets || allowedTargets.has(`${item.sourceFile}#${item.symbol}`))) {
     const target = context.targets.find(
@@ -490,25 +532,40 @@ export async function runUnitGenerator(options: {
         dependencyTestImportPath(dependency, context.project.projectRoot, outputDirectory),
       ]),
     );
+    const oraclePreparation = prepareOracleVerifiedPlan(context, target, planTarget);
+    const resolvedOracles = oraclePreparation.resolutions;
+    oracleResults.push({ target: label, testCases: resolvedOracles });
+    const verifiedPlanTarget = oraclePreparation.planTarget;
+    const unresolvedCases = oraclePreparation.unresolvedCases;
     console.log(`   Biên dịch deterministic ${label} [${target.profile}]...`);
     const compiled = compileUnitTestFile({
       target,
-      planTarget,
+      planTarget: verifiedPlanTarget,
       framework,
       importPath,
       dependencyPaths,
     });
+    const compiledById = new Map(compiled.testCases.map(result => [result.testCaseId, result]));
+    const unresolvedById = new Map(unresolvedCases.map(result => [result.testCaseId, result]));
+    const allTestCaseResults = planTarget.testCases.map(testCase =>
+      compiledById.get(testCase.id) || unresolvedById.get(testCase.id) || {
+        testCaseId: testCase.id,
+        status: 'NEEDS_ORACLE' as const,
+        errors: ['Không có kết quả Oracle/Compiler cho test case.'],
+      });
     if (!compiled.code) {
+      const onlyNeedsOracle = allTestCaseResults.length > 0
+        && allTestCaseResults.every(testCase => testCase.status === 'NEEDS_ORACLE');
       results.push({
         target: label,
         profile: target.profile,
-        status: 'STATIC_VALIDATION_FAILED',
-        errors: compiled.testCases.flatMap(testCase => testCase.errors),
-        testCases: compiled.testCases,
+        status: onlyNeedsOracle ? 'NEEDS_ORACLE' : 'STATIC_VALIDATION_FAILED',
+        errors: allTestCaseResults.flatMap(testCase => testCase.errors),
+        testCases: allTestCaseResults,
       });
       continue;
     }
-    const generatedIds = new Set(compiled.testCases
+    const generatedIds = new Set(allTestCaseResults
       .filter(testCase => testCase.status === 'GENERATED')
       .map(testCase => testCase.testCaseId));
     const generatedPlanTarget = {
@@ -529,7 +586,7 @@ export async function runUnitGenerator(options: {
         profile: target.profile,
         status: 'STATIC_VALIDATION_FAILED',
         errors: [`Lỗi nội bộ deterministic compiler: ${validation.errors.join(' | ')}`],
-        testCases: compiled.testCases,
+        testCases: allTestCaseResults,
       });
       fs.writeFileSync(path.join(session.runDirectory, `${slug(target.symbol)}.compiler-invalid.ts`), compiled.code);
       continue;
@@ -548,20 +605,20 @@ export async function runUnitGenerator(options: {
         profile: target.profile,
         status: 'TYPECHECK_FAILED',
         errors: typeErrors.map(error => `TypeScript preflight: ${error}`),
-        testCases: compiled.testCases,
+        testCases: allTestCaseResults,
       });
       fs.writeFileSync(path.join(session.runDirectory, `${slug(target.symbol)}.typecheck-errors.json`), `${JSON.stringify(typeErrors, null, 2)}\n`);
       continue;
     }
     generatedFiles.push(testPath);
-    const skippedCases = compiled.testCases.filter(testCase => testCase.status !== 'GENERATED');
+    const skippedCases = allTestCaseResults.filter(testCase => testCase.status !== 'GENERATED');
     results.push({
       target: label,
       profile: target.profile,
       status: skippedCases.length > 0 ? 'PARTIAL' : 'GENERATED',
       file: testPath,
       errors: skippedCases.flatMap(testCase => testCase.errors),
-      testCases: compiled.testCases,
+      testCases: allTestCaseResults,
     });
     console.log(`   ✅ Đã tạo: ${testPath}`);
   }
@@ -578,9 +635,40 @@ export async function runUnitGenerator(options: {
     generatedTargetFiles,
   }, session);
   writeGenerationManifest(session.runDirectory, results);
+  fs.writeFileSync(path.join(session.runDirectory, 'oracle-resolution.json'), `${JSON.stringify({
+    version: 1,
+    generatedAt: new Date().toISOString(),
+    policy: 'Only requirement references and deterministic static evaluation can verify an oracle. Sandbox observations are characterization only.',
+    targets: oracleResults,
+  }, null, 2)}\n`);
+  const oracleRequests = results.flatMap(result => (result.testCases || [])
+    .filter(testCase => testCase.status === 'NEEDS_ORACLE')
+    .map(testCase => {
+      const planTarget = plan.targets.find(item => `${item.sourceFile}#${item.symbol}` === result.target);
+      const plannedCase = planTarget?.testCases.find(item => item.id === testCase.testCaseId);
+      return {
+        target: result.target,
+        testCaseId: testCase.testCaseId,
+        name: plannedCase?.name,
+        inputs: plannedCase?.inputs,
+        proposedExpected: plannedCase?.expected,
+        proposedOracleSource: plannedCase?.oracleSource,
+        reasons: testCase.errors,
+        nextAction: 'Bổ sung expected nghiệp vụ vào ô yêu cầu và để Planner trích nguyên văn vào oracleEvidence.reference; hoặc refactor target thành pure function để static evaluator chứng minh.',
+      };
+    }));
+  fs.writeFileSync(path.join(session.runDirectory, 'oracle-requests.json'), `${JSON.stringify({
+    version: 1,
+    generatedAt: new Date().toISOString(),
+    count: oracleRequests.length,
+    requests: oracleRequests,
+  }, null, 2)}\n`);
   updateUntestableTargets(session.runDirectory, results);
   const notGenerated = results.filter(result => !result.file);
   const partialTargets = results.filter(result => result.status === 'PARTIAL');
+  if (oracleRequests.length > 0) {
+    console.warn(`⚠️ ${oracleRequests.length} test case cần expected có bằng chứng; batch không bị dừng. Chi tiết: ${path.join(session.runDirectory, 'oracle-requests.json')}`);
+  }
   if (partialTargets.length > 0) {
     console.warn(`⚠️ ${partialTargets.length} target được sinh một phần; xem trạng thái từng test case trong generation-manifest.json.`);
   }

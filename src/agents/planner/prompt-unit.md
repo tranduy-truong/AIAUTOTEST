@@ -27,6 +27,10 @@ Sinh test plan phủ tất cả branch ID đã cung cấp, dữ liệu biên và
 - Expected có trong test cũ được cung cấp: `existing-test`.
 - Chỉ đọc hành vi implementation: `implementation`. Không tuyên bố implementation là nghiệp vụ đúng.
 - Không được đổi expected chỉ để test dễ pass.
+- Planner chỉ **đề xuất** oracle. Generator sẽ xác minh lại bằng Oracle Resolver; JSON hợp lệ không đồng nghĩa expected đúng.
+- Mỗi test phải có `oracleEvidence`. Nếu dựa vào tester, `reference` phải là đoạn nguyên văn có trong requirements. Nếu chỉ suy luận từ code, dùng `status=proposed`, `source=ai-inference`; hệ thống sẽ tự đánh giá AST và chỉ sinh khi chứng minh được.
+- `type-contract` chỉ chứng minh kiểu/shape, không tự chứng minh giá trị exact.
+- Với lỗi, dùng matcher có cấu trúc: `error.className` và `error.message.match = equals | contains | regexp`. Không nhét mô tả tự nhiên vào `message`.
 
 Giá trị JSON đặc biệt phải mã hoá, không viết thành chuỗi thường:
 
@@ -95,10 +99,18 @@ Chỉ xuất một JSON object, không dùng markdown:
           "expected": {
             "kind": "return | throw | resolve | reject | side-effect",
             "value": "chỉ có khi phù hợp",
-            "message": "chỉ có khi throw/reject",
+            "error": {
+              "className": "Error | TypeError | RangeError | SyntaxError | ReferenceError",
+              "message": { "match": "equals | contains | regexp", "value": "nội dung", "flags": "i" }
+            },
             "calls": []
           },
           "oracleSource": "requirement | type-contract | existing-test | implementation",
+          "oracleEvidence": {
+            "status": "verified | proposed | observed",
+            "source": "requirement | existing-test | return-literal | throw-literal | pure-evaluation | sandbox-observation | ai-inference",
+            "reference": "đoạn nguyên văn trong requirements nếu source=requirement"
+          },
           "mocks": [
             {
               "module": "dependency có thật",

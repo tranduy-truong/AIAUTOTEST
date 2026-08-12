@@ -4,6 +4,7 @@ import type {
   UnitPlanTarget,
   UnitTarget,
 } from './schema.js';
+import { validateExpectedIntent, validateOracleEvidence } from './test-intent.schema.js';
 
 export interface UnitPlanValidationIssue {
   code: string;
@@ -261,6 +262,14 @@ function validateTarget(planTarget: UnitPlanTarget, target: UnitTarget): UnitPla
         issues.push({ code: 'INVALID_EXPECTED_RESULT', target: targetLabel, testCaseId: testCase.id, message });
       }
     }
+    if (isObject(testCase.expected)) {
+      for (const issue of validateExpectedIntent(testCase.expected)) {
+        issues.push({
+          code: 'INVALID_EXPECTED_RESULT', target: targetLabel, testCaseId: testCase.id,
+          message: `${issue.path}: ${issue.message}`,
+        });
+      }
+    }
     const expectedKind = testCase.expected?.kind;
     if (target.async && ['return', 'throw'].includes(String(expectedKind))) {
       issues.push({
@@ -305,6 +314,14 @@ function validateTarget(planTarget: UnitPlanTarget, target: UnitTarget): UnitPla
     }
     if (!['requirement', 'type-contract', 'existing-test', 'implementation'].includes(testCase.oracleSource)) {
       issues.push({ code: 'INVALID_ORACLE_SOURCE', target: targetLabel, testCaseId: testCase.id, message: 'oracleSource không hợp lệ.' });
+    }
+    if (testCase.oracleEvidence !== undefined) {
+      for (const issue of validateOracleEvidence(testCase.oracleEvidence)) {
+        issues.push({
+          code: 'INVALID_ORACLE_EVIDENCE', target: targetLabel, testCaseId: testCase.id,
+          message: `${issue.path}: ${issue.message}`,
+        });
+      }
     }
     if (!Array.isArray(testCase.mocks)) {
       issues.push({ code: 'INVALID_MOCK_PLAN', target: targetLabel, testCaseId: testCase.id, message: 'mocks phải là mảng.' });

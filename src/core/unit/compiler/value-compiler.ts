@@ -10,7 +10,15 @@ function propertyName(value: string): ts.PropertyName {
 export function compileDataValue(value: UnitDataValue): ts.Expression {
   if (value === null) return f.createNull();
   if (typeof value === 'string') return f.createStringLiteral(value);
-  if (typeof value === 'number') return f.createNumericLiteral(value);
+  if (typeof value === 'number') {
+    if (Number.isNaN(value)) return f.createPropertyAccessExpression(f.createIdentifier('Number'), 'NaN');
+    if (value === Number.POSITIVE_INFINITY) return f.createPropertyAccessExpression(f.createIdentifier('Number'), 'POSITIVE_INFINITY');
+    if (value === Number.NEGATIVE_INFINITY) return f.createPropertyAccessExpression(f.createIdentifier('Number'), 'NEGATIVE_INFINITY');
+    if (value < 0 || Object.is(value, -0)) {
+      return f.createPrefixUnaryExpression(ts.SyntaxKind.MinusToken, f.createNumericLiteral(Math.abs(value)));
+    }
+    return f.createNumericLiteral(value);
+  }
   if (typeof value === 'boolean') return value ? f.createTrue() : f.createFalse();
   if (Array.isArray(value)) return f.createArrayLiteralExpression(value.map(compileDataValue), false);
 

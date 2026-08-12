@@ -2,7 +2,11 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { buildUnitRunnerArgs, resolveUnitRunnerInvocation } from '../../src/core/unit/runner.js';
+import {
+  buildUnitRunnerArgs,
+  resolveUnitRunnerInvocation,
+  resolveVitestProjectConfig,
+} from '../../src/core/unit/runner.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -72,5 +76,21 @@ describe('Unit runner invocation', () => {
       '--coverageReporters=json', '--coverageReporters=json-summary',
       '--coverageThreshold={"global":{"branches":0,"functions":0,"lines":0,"statements":0}}',
     ]);
+  });
+
+  it('pins Vitest to the target project instead of inheriting a parent config', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'unit-runner-project-'));
+    const artifacts = fs.mkdtempSync(path.join(os.tmpdir(), 'unit-runner-artifacts-'));
+    temporaryDirectories.push(root, artifacts);
+    const generated = resolveVitestProjectConfig(root, artifacts);
+    expect(generated).toBe(path.join(artifacts, 'vitest.testkit.config.mjs'));
+    expect(fs.readFileSync(generated, 'utf-8')).toContain("environment: 'node'");
+    expect(buildUnitRunnerArgs('vitest', ['a.test.ts'], false, generated)).toEqual([
+      'run', 'a.test.ts', '--config', generated,
+    ]);
+
+    const projectConfig = path.join(root, 'vitest.config.ts');
+    fs.writeFileSync(projectConfig, 'export default {};\n');
+    expect(resolveVitestProjectConfig(root, artifacts)).toBe(projectConfig);
   });
 });

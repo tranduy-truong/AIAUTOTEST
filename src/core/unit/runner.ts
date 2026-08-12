@@ -51,6 +51,20 @@ function findLocalRunner(root: string, framework: 'vitest' | 'jest'): string | u
   }
 }
 
+export function resolveVitestProjectConfig(projectRoot: string, runDirectory: string): string {
+  const candidates = [
+    'vitest.config.ts', 'vitest.config.mts', 'vitest.config.cts',
+    'vitest.config.js', 'vitest.config.mjs', 'vitest.config.cjs',
+    'vite.config.ts', 'vite.config.mts', 'vite.config.js', 'vite.config.mjs',
+  ].map(name => path.join(projectRoot, name));
+  const existing = candidates.find(candidate => fs.existsSync(candidate));
+  if (existing) return existing;
+  const generated = path.join(runDirectory, 'vitest.testkit.config.mjs');
+  fs.mkdirSync(path.dirname(generated), { recursive: true });
+  fs.writeFileSync(generated, "export default { test: { environment: 'node', globals: false } };\n");
+  return generated;
+}
+
 /**
  * Windows cannot execute npm's `.cmd` shims with `spawnSync(..., { shell: false })`.
  * Launch the package's real JavaScript entry point with Node instead. This also
@@ -87,9 +101,10 @@ export function buildUnitRunnerArgs(
   framework: 'vitest' | 'jest',
   relativeFiles: string[],
   coverageEnabled: boolean,
+  configPath?: string,
 ): string[] {
   if (framework === 'vitest') {
-    return ['run', ...relativeFiles, ...(coverageEnabled
+    return ['run', ...relativeFiles, ...(configPath ? ['--config', configPath] : []), ...(coverageEnabled
       ? [
           '--coverage', '--coverage.reporter=json', '--coverage.reporter=json-summary',
           '--coverage.thresholds.perFile=false',
@@ -152,7 +167,10 @@ export function runLastGeneratedUnitTests(): UnitRunResult {
       exitCode: null,
     };
   }
-  const frameworkArgs = buildUnitRunnerArgs(session.testFramework, relativeFiles, coverageEnabled);
+  const configPath = session.testFramework === 'vitest'
+    ? resolveVitestProjectConfig(session.projectRoot, session.runDirectory)
+    : undefined;
+  const frameworkArgs = buildUnitRunnerArgs(session.testFramework, relativeFiles, coverageEnabled, configPath);
   let invocation: RunnerInvocation;
   try {
     invocation = resolveUnitRunnerInvocation(executable, session.testFramework);

@@ -22,6 +22,8 @@
     "src/agents/crawler/locator-registry.ts",
     "src/core/locator-resolver.ts",
     "src/core/unit/**/*.ts",
-    "tests/unit/**/*.ts"
+    "src/core/integration/**/*.ts",
+    "tests/unit/**/*.ts",
+    "tests/integration/**/*.ts"
   ]
 }

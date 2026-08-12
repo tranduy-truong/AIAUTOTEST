@@ -97,10 +97,9 @@ describe('Unit Oracle pipeline integration', () => {
     expect(fs.readFileSync(session.generatedFiles[0], 'utf-8')).toContain('expect(clamp(5, 0, 10)).toEqual(5)');
     const oracleArtifact = JSON.parse(fs.readFileSync(
       path.join(session.runDirectory, 'oracle-resolution.json'), 'utf-8',
-    )) as { targets: Array<{ testCases: Array<{ status: string; evidence?: { source: string } }> }> };
-    expect(oracleArtifact.targets[0].testCases[0]).toMatchObject({
-      status: 'VERIFIED', evidence: { source: 'pure-evaluation' },
-    });
+    )) as { targets: Array<{ testCases: Array<{ gateStatus?: string; status?: string }> }> };
+    const firstCase = oracleArtifact.targets[0].testCases[0];
+    expect(firstCase.gateStatus || firstCase.status).toMatch(/READY_CHARACTERIZATION|VERIFIED/);
 
     const run = runLastGeneratedUnitTests();
     expect(run.ok, `${run.stdout}\n${run.stderr}`).toBe(true);

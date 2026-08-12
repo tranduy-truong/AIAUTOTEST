@@ -20,6 +20,7 @@ import {
 import { runLastGeneratedUnitTests, summarizeUnitRunOutput } from "./core/unit/runner.js";
 import { evaluateUnitPlanOracleGates } from "./core/unit/oracle/oracle-gate-summary.js";
 import { runUnitCoverageGuidedLoop } from "./agents/planner/unit-coverage-loop.js";
+import { runIntegrationSandbox } from "./core/integration/sandbox-orchestrator.js";
 import {
   applyUnitOracleConfirmations,
   formatExpectedForTester,
@@ -693,11 +694,21 @@ async function runTests(level) {
     return;
   }
 
-  // Xác định lệnh chạy theo tầng
-  let command = "";
-  if (level === "e2e") command = "npx playwright test tests/e2e";
-  else if (level === "integration")
-    command = "npx vitest run tests/integration";
+  if (level === "integration") {
+    const intResult = await runIntegrationSandbox();
+    if (intResult.ok) {
+      success("Tất cả Integration Test đã pass trong Sandbox Harness.");
+      artifact("Báo cáo", intResult.reportPath);
+    } else {
+      uiError("Integration Test chưa pass.");
+      await runHealer("integration", "Integration Sandbox Test Suite Failed");
+    }
+    await returnToMenu();
+    return;
+  }
+
+  // E2E Level Runner
+  let command = "npx playwright test tests/e2e";
 
   try {
     const output = execSync(command, { encoding: "utf-8" });
@@ -821,8 +832,12 @@ async function runCliEntrypoint() {
           process.exit(0);
         }
       } else if (targetLevel === "integration") {
-        execSync("npx vitest run tests/integration", { stdio: "inherit" });
-        success("Integration Test pass.");
+        const intResult = await runIntegrationSandbox();
+        if (!intResult.ok) {
+          uiError(`Integration Sandbox Pipeline thất bại.`);
+          process.exit(1);
+        }
+        success("Integration Test pass thành công trong Sandbox Harness.");
         process.exit(0);
       } else if (targetLevel === "e2e") {
         execSync("npx playwright test tests/e2e", { stdio: "inherit" });

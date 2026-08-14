@@ -2,6 +2,8 @@
 
 Bộ công cụ hỗ trợ lên kế hoạch và sinh mã nguồn kiểm thử tự động (E2E, Integration, Unit) sử dụng AI, tích hợp Playwright và Vitest.
 
+> 📘 Người dùng mới: xem **[Hướng dẫn sử dụng chi tiết](docs/HUONG_DAN_SU_DUNG.md)** để cài đặt và vận hành E2E, Unit, Integration, xác thực, CI/CD và xử lý lỗi.
+
 ---
 
 ## 🛠️ Hướng dẫn cài đặt nhanh (Clone & Run)

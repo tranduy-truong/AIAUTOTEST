@@ -90,7 +90,6 @@ async function mainMenu() {
           value: "run_e2e",
         },
         {
-        {
           name: menuChoice(
             "03",
             "Chạy Integration",
@@ -98,6 +97,7 @@ async function mainMenu() {
           ),
           value: "run_integration",
         },
+
         {
           name: menuChoice(
             "04",
@@ -115,8 +115,6 @@ async function mainMenu() {
           value: "review_unit_oracles",
         },
 
-          value: "review_unit_oracles",
-        },
         {
           name: menuChoice("07", "Xem báo cáo", "Kết quả gần nhất"),
           value: "view_report",
@@ -560,8 +558,9 @@ Vi du:
       }
 
       contextData = scriptContent;
-
+    }
   } else if (level === "integration") {
+
     const { apiDesc } = await inquirer.prompt([
       {
         type: "input",

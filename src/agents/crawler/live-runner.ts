@@ -880,6 +880,9 @@ export async function runLive(testCases: ParsedTestCase[]): Promise<Map<string, 
 
     for (const [testCaseIndex, testCase] of testCases.entries()) {
       const isLoginSuite = isExplicitLoginSuite(testCase);
+      const contextOptions = fs.existsSync('.auth/storage-state.json')
+        ? { storageState: '.auth/storage-state.json' }
+        : {};
       const caseContextOptions = isLoginSuite ? {} : contextOptions;
 
       console.log(
@@ -889,13 +892,7 @@ export async function runLive(testCases: ParsedTestCase[]): Promise<Map<string, 
       );
       const snapshots: DomSnapshot[] = [];
       let abortRemainingSteps = false;
-      // Mỗi test case có context riêng để cookie/session không rò rỉ sang test khác.
-      // Mỗi test case có context riêng để cookie/session không rò rỉ sang test khác.
-      // Với Login Suite: Dùng context sạch hoàn toàn.
-      // Với Protected Suite: Dùng storageState hoặc extraHTTPHeaders đã lưu.
-      const contextOptions = fs.existsSync('.auth/storage-state.json')
-        ? { storageState: '.auth/storage-state.json' }
-        : {};
+
       const context = await browser.newContext(isLoginSuite ? {} : contextOptions);
 
       const page = await context.newPage();

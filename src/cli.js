@@ -3,6 +3,8 @@ import { execSync } from "child_process";
 import fs from "fs";
 import path from "path";
 import { TestPolicyHarness } from "./harness/policy.js";
+import { createNoAuthSession } from "./core/auth/auth-session.js";
+import { captureAuthSession } from "./core/auth/auth-capture.js";
 
 import { loadStructuredE2EPlan, runPlanner } from "./agents/planner/run.js";
 import { runGenerator } from "./agents/generator/run.js";
@@ -339,7 +341,20 @@ async function handlePlanAndGenerate() {
         }
       }
 
-      const authSession = createNoAuthSession();
+      let authSession = createNoAuthSession();
+      if (discoveryAuthInfo) {
+        console.log('[Auth] Đang mở trình duyệt để xác thực Discovery Crawler...');
+        try {
+          authSession = await captureAuthSession({
+            strategy: 'PLAYWRIGHT_STORAGE_STATE',
+            loginUrl: discoveryAuthInfo.loginUrl,
+            username: discoveryAuthInfo.username,
+            password: discoveryAuthInfo.password,
+          });
+        } catch (authErr) {
+          console.warn(`⚠️ [Auth Warning] Xác thực không thành công: ${authErr.message}. Tiếp tục quét với No-Auth...`);
+        }
+      }
 
       // 3. Chạy Discovery Crawler
       console.log('\n🔍 [Discovery Crawler] Đang mở browser và quét trang...');
@@ -351,6 +366,7 @@ async function handlePlanAndGenerate() {
           maxDepth: 2,
           headless: true,
         });
+
       } catch (err) {
         console.error(`   ❌ Discovery Crawler thất bại: ${err.message}`);
         await returnToMenu();

@@ -6,7 +6,7 @@ export class TestPolicyHarness {
   ai: OpenAIAdapter;
 
   constructor() {
-    this.ai = new OpenAIAdapter("llama-3.3-70b-versatile");
+    this.ai = new OpenAIAdapter();
   }
 
   async handleTestFailure(

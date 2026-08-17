@@ -295,7 +295,7 @@ export async function runIntegrationSandbox(
     console.log(`🧪 [Step 8/10] Thực thi API Integration Test Suite với Vitest JSON Reporter...`);
 
     const configFlag = mswInstance?.configFilePath ? `-c "${mswInstance.configFilePath}"` : '';
-    const vitestCmd = `npx vitest run ${config.testDirectory} ${configFlag} --reporter=json --outputFile="${jsonResultPath}"`;
+    const vitestCmd = `npx vitest run ${config.testDirectory} ${configFlag} --passWithNoTests --reporter=json --outputFile="${jsonResultPath}"`;
 
     const testResult = await spawnManagedProcess(vitestCmd, {
       cwd: config.projectRoot,

@@ -1,7 +1,13 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import * as yaml from 'js-yaml';
 import { OpenAIAdapter } from '../../adapters/openai.js';
+import {
+  generateApiTestSuiteFromOpenApi,
+  writeApiTestSuiteArtifact,
+  renderApiTestPlanMarkdown,
+} from '../../core/integration/api/contract-loader.js';
 import { renderStructuredPlanMarkdown } from './markdown-renderer.js';
 import { normalizePlannerOutput } from './normalizer.js';
 import type { StructuredE2EPlan } from './schema.js';
@@ -48,6 +54,29 @@ const MAX_E2E_CHUNK_STEPS = 14;
 const STEP_BULLET = /^\s*[-*•·▪◦–—]\s*/u;
 
 function parseJsonArray(rawOutput: string): unknown[] | null {
+  if (!rawOutput) return null;
+
+  // 1. Thử trích xuất từ markdown block ```json [...] ```
+  const codeBlockMatch = rawOutput.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+  if (codeBlockMatch) {
+    try {
+      const parsed = JSON.parse(codeBlockMatch[1].trim());
+      if (Array.isArray(parsed)) return parsed;
+    } catch { /* tiếp tục thử cách khác */ }
+  }
+
+  // 2. Thử tìm khối ngoặc vuông [ ... ] ngoài cùng
+  const firstBracket = rawOutput.indexOf('[');
+  const lastBracket = rawOutput.lastIndexOf(']');
+  if (firstBracket !== -1 && lastBracket > firstBracket) {
+    const candidate = rawOutput.slice(firstBracket, lastBracket + 1).trim();
+    try {
+      const parsed = JSON.parse(candidate);
+      if (Array.isArray(parsed)) return parsed;
+    } catch { /* tiếp tục */ }
+  }
+
+  // 3. Fallback: Parse trực tiếp sau khi bỏ fence
   const withoutFence = rawOutput
     .replace(/^```(?:json)?\s*/i, '')
     .replace(/```\s*$/i, '')
@@ -215,7 +244,7 @@ async function callPlannerAdapter(taskContent: string, suffix = '') {
     fs.mkdirSync(workDir, { recursive: true });
     fs.writeFileSync(path.join(workDir, 'task.md'), taskContent.trim());
 
-    const adapter = new OpenAIAdapter('llama-3.3-70b-versatile');
+    const adapter = new OpenAIAdapter();
     const result = await adapter.run({
       promptDir: workDir,
       workDir,
@@ -533,6 +562,65 @@ export async function runPlanner(
   }
   if (level === 'unit') {
     return runStructuredUnitPlanner(systemPrompt, contextData);
+  }
+
+  if (level === 'integration') {
+    // 1. Kiểm tra nếu input là file đặc tả OpenAPI / Swagger
+    let rawSpecContent = contextData;
+    const fileHeaderMatch = contextData.match(/^\[FILE ĐẶC TẢ API: ([^\]]+)\]\n([\s\S]*)$/);
+    if (fileHeaderMatch) {
+      rawSpecContent = fileHeaderMatch[2];
+    }
+
+    try {
+      let specObj: any = null;
+      if (rawSpecContent.trim().startsWith('{')) {
+        specObj = JSON.parse(rawSpecContent);
+      } else if (rawSpecContent.includes('openapi:') || rawSpecContent.includes('swagger:') || rawSpecContent.includes('paths:')) {
+        specObj = (yaml as any).load ? (yaml as any).load(rawSpecContent) : null;
+      }
+
+      if (specObj && (specObj.openapi || specObj.swagger) && specObj.paths) {
+        console.log(`\n📋 [OpenAPI Engine] Đã nhận diện tài liệu đặc tả OpenAPI (${specObj.info?.title || 'API'})`);
+        const baseUrl = specObj.servers?.[0]?.url || 'https://hcm.mobifone.vn';
+        const suite = generateApiTestSuiteFromOpenApi(specObj, baseUrl);
+
+        ensureArtifactsDir();
+        writeApiTestSuiteArtifact(suite, 'artifacts/api-test-plan.json');
+
+        // Chuyển đổi sang format mảng test-plan-integration.json
+        const planItems = suite.tests.map(tc => {
+          const statusAssertion = tc.assertions.find(a => a.type === 'STATUS');
+          const statusCode = statusAssertion && 'expected' in statusAssertion ? String(statusAssertion.expected) : '200';
+          const moduleName = tc.request.path.split('/').filter(Boolean)[1] || 'API';
+          return {
+            id: tc.id,
+            module: moduleName.toUpperCase(),
+            testCaseName: tc.name,
+            objective: `Kiểm tra ${tc.request.method} ${tc.request.path} → HTTP ${statusCode}`,
+            target: `${tc.request.method} ${tc.request.path}`,
+            preconditions: 'API server đang hoạt động, có kết nối mạng',
+            testSteps: `1. Gửi request ${tc.request.method} tới ${tc.request.path}\n2. Kiểm tra status code là ${statusCode}\n3. Xác minh schema body trả về`,
+            testData: '{}',
+            expectedResult: `HTTP ${statusCode} đúng chuẩn hợp đồng đặc tả`,
+            priority: 'Critical',
+            testType: 'Integration / Greybox',
+            notes: `Oracle: SPECIFICATION / REQUIREMENT (${tc.oracle?.evidenceSource || 'OpenAPI 3.0'})`,
+          };
+        });
+
+        const planPath = `artifacts/test-plan-integration.json`;
+        fs.writeFileSync(planPath, JSON.stringify(planItems, null, 2) + '\n');
+        const markdown = renderApiTestPlanMarkdown(suite);
+        fs.writeFileSync('artifacts/test-plan-integration.md', markdown);
+
+        console.log(`✅ [OpenAPI Engine] Đã sinh thành công ${suite.tests.length} test cases chính xác 100%!`);
+        console.log(`📁 Kế hoạch lưu tại: ${planPath} & artifacts/test-plan-integration.md`);
+        return true;
+      }
+    } catch {
+      // Nếu không parse được dạng spec thì tiếp tục cho AI Planner phân tích dạng văn bản
+    }
   }
 
   const taskContent = `${systemPrompt}\n\n[THÔNG TIN THỰC TẾ]\n${contextData}\n\nChỉ xuất mảng JSON đúng schema.`;

@@ -1,9 +1,9 @@
-﻿import fs from 'fs';
+﻿import fs from "fs";
 import { defineConfig, devices } from "@playwright/test";
 
 // Tu dong inject storageState neu .auth/storage-state.json da ton tai
-const storageState = fs.existsSync('.auth/storage-state.json')
-  ? '.auth/storage-state.json'
+const storageState = fs.existsSync(".auth/storage-state.json")
+  ? ".auth/storage-state.json"
   : undefined;
 
 export default defineConfig({
@@ -24,13 +24,13 @@ export default defineConfig({
       name: "chromium",
       use: { ...devices["Desktop Chrome"] },
     },
-    {
-      name: "firefox",
-      use: { ...devices["Desktop Firefox"] },
-    },
-    {
-      name: "webkit",
-      use: { ...devices["Desktop Safari"] },
-    },
+    // {
+    //name: "firefox",
+    //  use: { ...devices["Desktop Firefox"] },
+    // },
+    // {
+    //   name: "webkit",
+    // use: { ...devices["Desktop Safari"] },
+    // },
   ],
 });

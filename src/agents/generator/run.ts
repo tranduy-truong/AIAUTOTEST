@@ -5,6 +5,7 @@ import { OpenAIAdapter } from "../../adapters/openai.js";
 import type { ActionPlan, ResolvedAction } from "../../core/action-plan.js";
 import { runUnitGenerator } from './unit-generator.js';
 import { section } from '../../core/cli-ui.js';
+import { generateVitestCodeFromApiTestSuite } from '../../core/integration/api/contract-loader.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const MAX_DOM_REPORT_CHARS = 8000;
@@ -210,6 +211,29 @@ export async function runGenerator(
     `\n👨‍💻 [Generator Agent] Đang sinh code kiểm thử cho tầng: ${level.toUpperCase()}`,
   );
 
+  if (level === 'integration' && fs.existsSync('artifacts/api-test-plan.json')) {
+    try {
+      const suiteObj = JSON.parse(fs.readFileSync('artifacts/api-test-plan.json', 'utf-8'));
+      if (suiteObj && suiteObj.tests && Array.isArray(suiteObj.tests)) {
+        console.log(`\n📋 [OpenAPI Code Generator] Đang sinh mã kiểm thử Vitest cho ${suiteObj.tests.length} API endpoints...`);
+        const codeContent = generateVitestCodeFromApiTestSuite(suiteObj);
+
+        const outDir = getGeneratedTestDirectory('integration');
+        if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
+
+        const targetFilePath = path.join(outDir, 'api_generated.test.ts');
+        fs.writeFileSync(targetFilePath, codeContent);
+
+        console.log(`✅ [OpenAPI Code Generator] Đã sinh thành công mã kiểm thử Vitest!`);
+        console.log(`📁 File test đã lưu tại: tests/integration/api_generated.test.ts`);
+        console.log(`👉 Bây giờ bạn có thể chọn Menu 03 để thực thi bộ test này!`);
+        return true;
+      }
+    } catch (err: any) {
+      console.warn(`⚠️ Lỗi khi sinh code từ api-test-plan.json: ${err.message}. Chuyển sang AI Generator...`);
+    }
+  }
+
   // 1. Kiểm tra kế hoạch từ file JSON
   const preferredPlanPath = level === 'e2e'
     ? 'artifacts/test-plan-e2e.md'
@@ -325,7 +349,7 @@ test.describe('Product', () => {
   fs.mkdirSync(workDir, { recursive: true });
   fs.writeFileSync(path.join(workDir, "task.md"), prompt.trim());
 
-  const adapter = new OpenAIAdapter("llama-3.3-70b-versatile");
+  const adapter = new OpenAIAdapter();
 
   const result = await adapter.run({
     promptDir: workDir,

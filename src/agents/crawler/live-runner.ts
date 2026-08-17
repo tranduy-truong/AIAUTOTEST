@@ -2,7 +2,6 @@ import fs from 'fs';
 import path from 'path';
 import { chromium, Browser, Locator, Page } from 'playwright';
 import type { ParsedStep, ParsedTestCase } from '../planner/schema.js';
-import type { AuthSession } from '../../core/auth/auth-session.js';
 import {
   DomSnapshot,
   ElementInfo,
@@ -820,26 +819,13 @@ function writeCrawlerFailures(failures: CrawlerFailure[]): void {
   );
 }
 
-export async function runLive(
-  testCases: ParsedTestCase[],
-  authSession?: AuthSession,
-): Promise<Map<string, DomSnapshot[]>> {
+export async function runLive(testCases: ParsedTestCase[]): Promise<Map<string, DomSnapshot[]>> {
   const snapshotsMap = new Map<string, DomSnapshot[]>();
   const failures: CrawlerFailure[] = [];
   const registry = loadLocatorRegistry();
   const guided = guidedLearningEnabled();
   const runtime: LocatorRuntime = { registry, guided };
   let browser: Browser | null = null;
-
-  // Chuẩn bị contextOptions từ AuthSession (nếu có).
-  const contextOptions: Parameters<Browser['newContext']>[0] = {};
-  if (authSession?.strategy === 'PLAYWRIGHT_STORAGE_STATE' && authSession.storageStatePath) {
-    contextOptions.storageState = authSession.storageStatePath;
-    console.log('[Live Runner] Auth: Dùng storageState đã lưu — Crawler sẽ hoạt động ở trạng thái đã đăng nhập.');
-  } else if (authSession?.strategy === 'JWT_HEADER' && authSession.extraHeaders) {
-    contextOptions.extraHTTPHeaders = authSession.extraHeaders;
-    console.log('[Live Runner] Auth: Inject JWT Authorization header vào toàn bộ request.');
-  }
 
   try {
     const headless = guided ? false : crawlerRunsHeadless();
@@ -855,8 +841,7 @@ export async function runLive(
       const snapshots: DomSnapshot[] = [];
       let abortRemainingSteps = false;
       // Mỗi test case có context riêng để cookie/session không rò rỉ sang test khác.
-      // Auth session được inject qua contextOptions (storageState hoặc extraHTTPHeaders).
-      const context = await browser.newContext(contextOptions);
+      const context = await browser.newContext();
       const page = await context.newPage();
 
       try {

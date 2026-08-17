@@ -74,6 +74,13 @@ Tiếp nhận thông báo lỗi thực thi từ Playwright Runner, tiến hành 
    - Sửa thành hai assertion riêng theo đúng Expected Result của Planner; tuyệt đối không thay nội dung A hoặc B.
    - Chỉ phân loại `LOCATOR_CHANGED` khi log cho thấy locator không tìm thấy, không duy nhất hoặc DOM evidence đã thay đổi.
    - Locator thay thế phải có bằng chứng từ DOM/Accessibility Snapshot; cấm đoán class hoặc accessible name.
+5. **QUY TẮC ASSERTION CHO Ô NHẬP LIỆU FORM / MẬT KHẨU**:
+   - Khi gặp lỗi `element(s) not found` trên ô nhập liệu (ví dụ tính năng ẩn/hiện mật khẩu Icon con mắt): KHÔNG dùng `getByText()` vì thẻ `<input>` lưu giá trị trong `value` và `type`.
+   - BẮT BUỘC sửa thành `toHaveAttribute('type', 'text'|'password')` và `toHaveValue('...')`.
+6. **ĐỐI CHIẾU DỮ LIỆU INPUT TRONG NEGATIVE TEST**:
+   - Nếu kịch bản yêu cầu đăng nhập thất bại mà code test lỡ điền username/password đúng (dẫn đến đăng nhập thành công khiến thông báo lỗi không hiện), phân loại `TEST_SCRIPT_BUG` và sửa dữ liệu `fill()` thành giá trị không hợp lệ theo kịch bản.
+7. **XỬ LÝ TIMEOUT CHUYỂN TRANG VÀ NOTIFICATION**:
+   - Đặt `timeout: 10000` cho các câu lệnh `not.toHaveURL(...)` hoặc `toBeVisible(...)` đối với thông báo xuất hiện từ server để tránh bị đứt gãy do nghẽn mạng khi chạy đa trình duyệt.
 
 ## Định dạng đầu ra
 

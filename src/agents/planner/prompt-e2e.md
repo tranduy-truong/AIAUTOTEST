@@ -32,9 +32,10 @@ Dropdown có ô tìm kiếm phải được tách theo hành vi. Ví dụ câu �
 # Assertion schema
 
 - Text hiển thị: `{ "kind": "text_visible", "value": "..." }`
+- Value trong ô nhập liệu: `{ "kind": "input_value", "target": "...", "value": "..." }`
 - URL chứa: `{ "kind": "url_contains", "value": "..." }`
 - URL không chứa: `{ "kind": "url_not_contains", "value": "..." }`
-- Type ô mật khẩu: `{ "kind": "attribute", "target": "password", "name": "type", "value": "text" }` hoặc `"password"`
+- Type ô mật khẩu (mắt ẩn/hiện): `{ "kind": "attribute", "target": "password", "name": "type", "value": "text" }` (khi hiện rõ) hoặc `"password"` (khi ẩn/chấm). CHÚ Ý: `value` BẮT BUỘC chỉ được là `"text"` hoặc `"password"`.
 - Không đủ rõ: `{ "kind": "unknown", "value": "nguyên văn yêu cầu" }` đồng thời yêu cầu clarification.
 
 # Đầu ra bắt buộc

@@ -2,6 +2,15 @@ import fs from "fs";
 import path from "path";
 import { OpenAIAdapter } from "../adapters/openai.js";
 
+function truncateLog(log: string, maxChars = 8000): string {
+  if (!log || log.length <= maxChars) return log;
+  const headSize = Math.floor(maxChars * 0.25);
+  const tailSize = Math.floor(maxChars * 0.75);
+  const head = log.slice(0, headSize);
+  const tail = log.slice(log.length - tailSize);
+  return `${head}\n\n... [ĐÃ RÚT GỌN LOG DÀI ĐỂ TRÁNH VƯỢT GIỚI HẠN GROQ API TPM (12,000 TOKENS)] ...\n\n${tail}`;
+}
+
 export class TestPolicyHarness {
   ai: OpenAIAdapter;
 
@@ -20,13 +29,15 @@ export class TestPolicyHarness {
       ? "Chẩn đoán nguyên nhân gốc rễ (Không tự sửa code để tránh che giấu bug thật)"
       : "Phân tích log và đề xuất bản vá code";
 
+    const cleanErrorMessage = truncateLog(errorMessage, 8000);
+
     const prompt = `Bạn là chuyên gia Automation Testing.
 
 Phân tích lỗi sau từ bộ test [${level.toUpperCase()}] - Suite: ${suiteName}
 Chế độ xử lý: ${mode} (${isDiagnoseOnly ? "CHỈ CHẨN ĐOÁN LỖI NGHIỆP VỤ - KHÔNG SỬA CODE TEST KHI CHƯA XÁC NHẬN" : "TỰ ĐỘNG ĐỀ XUẤT VÁ CODE"})
 
 === LOG LỖI ===
-${errorMessage}
+${cleanErrorMessage}
 ===============
 
 Hãy trả lời theo đúng cấu trúc sau:

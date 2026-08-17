@@ -1,0 +1,329 @@
+- generic [ref=f1e1]:
+  - generic [ref=f1e40]:
+    - generic [ref=f1e47]:
+      - button "logo Sở Dân Tộc - Tôn Giáo" [ref=f1e609] [cursor=pointer]:
+        - img "logo" [ref=f1e610]
+        - generic [ref=f1e51]: Sở Dân Tộc - Tôn Giáo
+      - list [ref=f1e53]:
+        - listitem [ref=f1e55]:
+          - button "Tôn giáo" [expanded] [ref=f1e611] [cursor=pointer]
+          - list [ref=f1e64]:
+            - listitem [ref=f1e65]:
+              - generic [ref=f1e66] [cursor=pointer]: Tổ chức
+            - listitem [ref=f1e67]:
+              - generic [ref=f1e68] [cursor=pointer]: Cơ sở
+            - listitem [ref=f1e69]:
+              - generic [ref=f1e70] [cursor=pointer]: Nhân sự
+            - listitem [ref=f1e71]:
+              - generic [ref=f1e72] [cursor=pointer]: Cơ sở đào tạo
+        - listitem [ref=f1e74]:
+          - button "Tín ngưỡng" [ref=f1e612] [cursor=pointer]
+        - listitem [ref=f1e80]:
+          - button "Danh mục" [ref=f1e613] [cursor=pointer]
+        - listitem [ref=f1e85]:
+          - button "Xét duyệt" [ref=f1e614] [cursor=pointer]
+        - listitem [ref=f1e92]:
+          - button "Hệ thống" [ref=f1e615] [cursor=pointer]
+    - main [ref=f1e99]:
+      - generic [ref=f1e100]:
+        - generic [ref=f1e101]:
+          - button "Toggle Sidebar" [ref=f1e616] [cursor=pointer]
+          - separator [ref=f1e104]
+          - navigation "breadcrumb" [ref=f1e617]:
+            - list [ref=f1e106]:
+              - listitem [ref=f1e107]:
+                - generic [ref=f1e108]: Tôn giáo
+              - listitem [ref=f1e109]
+              - listitem [ref=f1e112]:
+                - link "Cơ sở" [disabled] [ref=f1e618]
+        - button "AD" [ref=f1e619] [cursor=pointer]
+      - generic [ref=f1e117]:
+        - generic [ref=f1e118]:
+          - button "Tìm kiếm" [active] [ref=f1e620] [cursor=pointer]
+          - button "Thêm" [ref=f1e621] [cursor=pointer]
+        - generic [ref=f1e122]:
+          - table [ref=f1e125]:
+            - rowgroup [ref=f1e126]:
+              - row [ref=f1e622]:
+                - columnheader "Mã cơ sở" [ref=f1e623]
+                - columnheader "Tên cơ sở" [ref=f1e624]
+                - columnheader "Tổ chức quản lý" [ref=f1e625]
+                - columnheader "Tên thường gọi" [ref=f1e626]
+                - columnheader "Loại hình cơ sở" [ref=f1e627]
+                - columnheader "Thực trạng" [ref=f1e628]
+                - columnheader "Loại hình di tích" [ref=f1e629]
+                - columnheader "Cấp di tích" [ref=f1e630]
+                - columnheader "Địa chỉ chi tiết" [ref=f1e631]
+                - columnheader "Tỉnh/Thành phố" [ref=f1e632]
+                - columnheader "Xã/Phường" [ref=f1e633]
+                - columnheader "Số điện thoại" [ref=f1e634]
+                - columnheader "Email" [ref=f1e635]
+                - columnheader "Website" [ref=f1e636]
+                - columnheader "Ngày thành lập" [ref=f1e637]
+                - columnheader "Thao tác" [ref=f1e638]
+            - rowgroup [ref=f1e144]:
+              - row [ref=f1e639]:
+                - cell "CSTG008" [ref=f1e640]
+                - cell "Chùa Một C" [ref=f1e641]
+                - cell "BTS GHPGVN TP. Hồ Chí Minh333" [ref=f1e642]
+                - cell "Chùa Một Cột" [ref=f1e643]
+                - cell [ref=f1e150]
+                - cell [ref=f1e151]
+                - cell [ref=f1e152]
+                - cell [ref=f1e153]
+                - cell "Phố Chùa Một Cột, Đội Cấn, Ba Đình, Hà Nội" [ref=f1e644]
+                - cell "Thành phố Hà Nội" [ref=f1e645]
+                - cell [ref=f1e156]
+                - cell "02438463918" [ref=f1e646]
+                - cell [ref=f1e158]
+                - cell [ref=f1e159]
+                - cell "01/01/1049" [ref=f1e647]
+                - cell [ref=f1e161]:
+                  - generic [ref=f1e162]:
+                    - link [ref=f1e163] [cursor=pointer]:
+                      - /url: /qly-dttg/quan-tri/ton-giao/co-so/CSTG008
+                      - button [ref=f1e164]
+                    - button [ref=f1e165] [cursor=pointer]
+                    - button [ref=f1e166] [cursor=pointer]
+              - row [ref=f1e648]:
+                - cell "CSTG007" [ref=f1e649]
+                - cell "Chùa Vĩnh Nghiêm" [ref=f1e650]
+                - cell "BTS GHPGVN TP. Hồ Chí Minh333" [ref=f1e651]
+                - cell "Chùa Vĩnh Nghiêm" [ref=f1e652]
+                - cell "Chùa" [ref=f1e653]
+                - cell "Đang sử dụng hoạt động" [ref=f1e654]
+                - cell [ref=f1e174]
+                - cell [ref=f1e175]
+                - cell "Số 339 Nam Kỳ Khởi Nghĩa, Quận 3, TP.HCM" [ref=f1e655]
+                - cell "Thành phố Hồ Chí Minh" [ref=f1e656]
+                - cell [ref=f1e178]
+                - cell "02838488953" [ref=f1e657]
+                - cell [ref=f1e180]
+                - cell [ref=f1e181]
+                - cell "01/01/1971" [ref=f1e658]
+                - cell [ref=f1e183]:
+                  - generic [ref=f1e184]:
+                    - link [ref=f1e185] [cursor=pointer]:
+                      - /url: /qly-dttg/quan-tri/ton-giao/co-so/CSTG007
+                      - button [ref=f1e186]
+                    - button [ref=f1e187] [cursor=pointer]
+                    - button [ref=f1e188] [cursor=pointer]
+              - row [ref=f1e659]:
+                - cell "CSTG006" [ref=f1e660]
+                - cell "Thánh đường Al-Noor" [ref=f1e661]
+                - cell "Ban Đại diện Cộng đồng Hồi giáo TP.HCM" [ref=f1e662]
+                - cell "Thánh đường Al-Noor" [ref=f1e663]
+                - cell "Thánh đường" [ref=f1e664]
+                - cell "Đang sử dụng hoạt động" [ref=f1e665]
+                - cell [ref=f1e196]
+                - cell [ref=f1e197]
+                - cell "641 Hàn Hải Nguyên, Phường 1, Quận 11, TP.HCM" [ref=f1e666]
+                - cell "Thành phố Hồ Chí Minh" [ref=f1e667]
+                - cell [ref=f1e200]
+                - cell "02838571560" [ref=f1e668]
+                - cell [ref=f1e202]
+                - cell [ref=f1e203]
+                - cell "01/01/1975" [ref=f1e669]
+                - cell [ref=f1e205]:
+                  - generic [ref=f1e206]:
+                    - link [ref=f1e207] [cursor=pointer]:
+                      - /url: /qly-dttg/quan-tri/ton-giao/co-so/CSTG006
+                      - button [ref=f1e208]
+                    - button [ref=f1e209] [cursor=pointer]
+                    - button [ref=f1e210] [cursor=pointer]
+              - row [ref=f1e670]:
+                - cell "CSTG005" [ref=f1e671]
+                - cell "Tòa thánh Tây Ninh" [ref=f1e672]
+                - cell "Hội thánh Cao Đài Tây Ninh" [ref=f1e673]
+                - cell "Tòa thánh Tây Ninh" [ref=f1e674]
+                - cell "Tòa thánh" [ref=f1e675]
+                - cell "Đang sử dụng hoạt động" [ref=f1e676]
+                - cell [ref=f1e218]
+                - cell [ref=f1e219]
+                - cell "Long Thành Trung, Hòa Thành, Tây Ninh" [ref=f1e677]
+                - cell "Tỉnh Tây Ninh" [ref=f1e678]
+                - cell "Phường Tân Ninh" [ref=f1e679]
+                - cell "02763822272" [ref=f1e680]
+                - cell [ref=f1e224]
+                - cell [ref=f1e225]
+                - cell "01/11/1927" [ref=f1e681]
+                - cell [ref=f1e227]:
+                  - generic [ref=f1e228]:
+                    - link [ref=f1e229] [cursor=pointer]:
+                      - /url: /qly-dttg/quan-tri/ton-giao/co-so/CSTG005
+                      - button [ref=f1e230]
+                    - button [ref=f1e231] [cursor=pointer]
+                    - button [ref=f1e232] [cursor=pointer]
+              - row [ref=f1e682]:
+                - cell "CSTG004" [ref=f1e683]
+                - cell "Nhà thờ Lớn Hà Nội" [ref=f1e684]
+                - cell "Hội đồng Giám mục Việt Nam" [ref=f1e685]
+                - cell "Nhà thờ Lớn" [ref=f1e686]
+                - cell "Nhà thờ" [ref=f1e687]
+                - cell "Đang sử dụng hoạt động" [ref=f1e688]
+                - cell [ref=f1e240]
+                - cell [ref=f1e241]
+                - cell "Số 40 Nhà Chung, Hoàn Kiếm, Hà Nội" [ref=f1e689]
+                - cell "Thành phố Hà Nội" [ref=f1e690]
+                - cell [ref=f1e244]
+                - cell "02439285389" [ref=f1e691]
+                - cell [ref=f1e246]
+                - cell [ref=f1e247]
+                - cell "24/12/1888" [ref=f1e692]
+                - cell [ref=f1e249]:
+                  - generic [ref=f1e250]:
+                    - link [ref=f1e251] [cursor=pointer]:
+                      - /url: /qly-dttg/quan-tri/ton-giao/co-so/CSTG004
+                      - button [ref=f1e252]
+                    - button [ref=f1e253] [cursor=pointer]
+                    - button [ref=f1e254] [cursor=pointer]
+              - row [ref=f1e693]:
+                - cell "CSTG003" [ref=f1e694]
+                - cell "Nhà thờ Đức Bà Sài Gòn" [ref=f1e695]
+                - cell "Hội đồng Giám mục Việt Nam" [ref=f1e696]
+                - cell "Nhà thờ Đức Bà" [ref=f1e697]
+                - cell "Nhà thờ" [ref=f1e698]
+                - cell "Đang sử dụng hoạt động" [ref=f1e699]
+                - cell [ref=f1e262]
+                - cell [ref=f1e263]
+                - cell "Số 1 Công xã Paris, Bến Nghé, Quận 1" [ref=f1e700]
+                - cell "Thành phố Hồ Chí Minh" [ref=f1e701]
+                - cell [ref=f1e266]
+                - cell "02838297898" [ref=f1e702]
+                - cell [ref=f1e268]
+                - cell [ref=f1e269]
+                - cell "11/04/1880" [ref=f1e703]
+                - cell [ref=f1e271]:
+                  - generic [ref=f1e272]:
+                    - link [ref=f1e273] [cursor=pointer]:
+                      - /url: /qly-dttg/quan-tri/ton-giao/co-so/CSTG003
+                      - button [ref=f1e274]
+                    - button [ref=f1e275] [cursor=pointer]
+                    - button [ref=f1e276] [cursor=pointer]
+              - row [ref=f1e704]:
+                - cell "CSTG0027" [ref=f1e705]
+                - cell "test_chuyển_page" [ref=f1e706]
+                - cell "BTS GHPGVN TP. Hồ Chí Minh333" [ref=f1e707]
+                - cell [ref=f1e281]
+                - cell [ref=f1e282]
+                - cell [ref=f1e283]
+                - cell [ref=f1e284]
+                - cell [ref=f1e285]
+                - cell [ref=f1e286]
+                - cell "Thành phố Hồ Chí Minh" [ref=f1e708]
+                - cell [ref=f1e288]
+                - cell [ref=f1e289]
+                - cell [ref=f1e290]
+                - cell [ref=f1e291]
+                - cell [ref=f1e292]
+                - cell [ref=f1e293]:
+                  - generic [ref=f1e294]:
+                    - link [ref=f1e295] [cursor=pointer]:
+                      - /url: /qly-dttg/quan-tri/ton-giao/co-so/CSTG0027
+                      - button [ref=f1e296]
+                    - button [ref=f1e297] [cursor=pointer]
+                    - button [ref=f1e298] [cursor=pointer]
+              - row [ref=f1e709]:
+                - cell "CSTG0026" [ref=f1e710]
+                - cell "test2" [ref=f1e711]
+                - cell "Giáo hội Phật giáo Việt Nam" [ref=f1e712]
+                - cell "testhai" [ref=f1e713]
+                - cell [ref=f1e304]
+                - cell [ref=f1e305]
+                - cell [ref=f1e306]
+                - cell [ref=f1e307]
+                - cell [ref=f1e308]
+                - cell "Thành phố Hồ Chí Minh" [ref=f1e714]
+                - cell [ref=f1e310]
+                - cell [ref=f1e311]
+                - cell [ref=f1e312]
+                - cell [ref=f1e313]
+                - cell [ref=f1e314]
+                - cell [ref=f1e315]:
+                  - generic [ref=f1e316]:
+                    - link [ref=f1e317] [cursor=pointer]:
+                      - /url: /qly-dttg/quan-tri/ton-giao/co-so/CSTG0026
+                      - button [ref=f1e318]
+                    - button [ref=f1e319] [cursor=pointer]
+                    - button [ref=f1e320] [cursor=pointer]
+              - row [ref=f1e715]:
+                - cell "CSTG0025" [ref=f1e716]
+                - cell "test" [ref=f1e717]
+                - cell "BTS GHPGVN TP. Hồ Chí Minh333" [ref=f1e718]
+                - cell [ref=f1e325]
+                - cell "Chùa" [ref=f1e719]
+                - cell "Đang sử dụng hoạt động" [ref=f1e720]
+                - cell [ref=f1e328]
+                - cell [ref=f1e329]
+                - cell [ref=f1e330]
+                - cell "Thành phố Hồ Chí Minh" [ref=f1e721]
+                - cell [ref=f1e332]
+                - cell [ref=f1e333]
+                - cell [ref=f1e334]
+                - cell [ref=f1e335]
+                - cell [ref=f1e336]
+                - cell [ref=f1e337]:
+                  - generic [ref=f1e338]:
+                    - link [ref=f1e339] [cursor=pointer]:
+                      - /url: /qly-dttg/quan-tri/ton-giao/co-so/CSTG0025
+                      - button [ref=f1e340]
+                    - button [ref=f1e341] [cursor=pointer]
+                    - button [ref=f1e342] [cursor=pointer]
+              - row [ref=f1e722]:
+                - cell "CSTG002" [ref=f1e723]
+                - cell "Văn phòng Trung ương Giáo hội Phật giáo Việt Nam" [ref=f1e724]
+                - cell "Giáo hội Phật giáo Việt Nam" [ref=f1e725]
+                - cell "VP TW GHPGVN" [ref=f1e726]
+                - cell "Trụ sở" [ref=f1e727]
+                - cell "Đang sử dụng hoạt động" [ref=f1e728]
+                - cell [ref=f1e350]
+                - cell [ref=f1e351]
+                - cell "Số 73 Quán Sứ, Hoàn Kiếm, Hà Nội" [ref=f1e729]
+                - cell "Thành phố Hà Nội" [ref=f1e730]
+                - cell [ref=f1e354]
+                - cell "02439353888" [ref=f1e731]
+                - cell [ref=f1e356]
+                - cell [ref=f1e357]
+                - cell "07/11/1981" [ref=f1e732]
+                - cell [ref=f1e359]:
+                  - generic [ref=f1e360]:
+                    - link [ref=f1e361] [cursor=pointer]:
+                      - /url: /qly-dttg/quan-tri/ton-giao/co-so/CSTG002
+                      - button [ref=f1e362]
+                    - button [ref=f1e363] [cursor=pointer]
+                    - button [ref=f1e364] [cursor=pointer]
+              - row [ref=f1e733]:
+                - cell "CSTG001" [ref=f1e734]
+                - cell "Chùa Quán Sứ" [ref=f1e735]
+                - cell "Giáo hội Phật giáo Việt Nam" [ref=f1e736]
+                - cell "Chùa Quán Sứ" [ref=f1e737]
+                - cell "Chùa" [ref=f1e738]
+                - cell "Đang sử dụng hoạt động" [ref=f1e739]
+                - cell [ref=f1e372]
+                - cell [ref=f1e373]
+                - cell "Số 73 Quán Sứ, Hoàn Kiếm" [ref=f1e740]
+                - cell "Thành phố Hà Nội" [ref=f1e741]
+                - cell [ref=f1e376]
+                - cell "02439353888" [ref=f1e742]
+                - cell [ref=f1e378]
+                - cell [ref=f1e379]
+                - cell "01/01/1950" [ref=f1e743]
+                - cell [ref=f1e381]:
+                  - generic [ref=f1e382]:
+                    - link [ref=f1e383] [cursor=pointer]:
+                      - /url: /qly-dttg/quan-tri/ton-giao/co-so/CSTG001
+                      - button [ref=f1e384]
+                    - button [ref=f1e385] [cursor=pointer]
+                    - button [ref=f1e386] [cursor=pointer]
+          - generic [ref=f1e388]:
+            - generic [ref=f1e389]: Tổng 11 dòng
+            - generic [ref=f1e390]:
+              - generic [ref=f1e391]: Số dòng/trang
+              - combobox [ref=f1e392] [cursor=pointer]:
+                - generic [ref=f1e393]: "20"
+                - img: ▼
+              - textbox [ref=f1e394]: "20"
+      - generic:
+        - img "trong dong"
+  - region "Notifications alt+T"
+  - alert [ref=f1e39]

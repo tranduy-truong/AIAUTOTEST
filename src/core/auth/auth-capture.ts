@@ -129,17 +129,70 @@ async function captureStorageStateSession(
   console.log(`[Auth] Đang mở trang đăng nhập: ${loginUrl}`);
   await page.goto(loginUrl, { timeout, waitUntil: 'domcontentloaded' });
 
+  // Chờ redirect nếu trang yêu cầu đăng nhập (ví dụ: trang đích redirect về /dang-nhap)
+  try {
+    await page.waitForLoadState('networkidle', { timeout: 5000 });
+  } catch {
+    // Timeout networkidle không ảnh hưởng — tiếp tục
+  }
+
+  const currentUrl = page.url();
+  if (currentUrl !== loginUrl) {
+    console.log(`[Auth] Trang đã redirect đến: ${currentUrl}`);
+  }
+
   // Tìm và điền username
-  const usernameInput = await findInputByLabelOrSelector(
+  let usernameInput = await findInputByLabelOrSelector(
     page,
     config.usernameLabel,
     USERNAME_SELECTORS,
   );
+
+  // Nếu không tìm thấy form login → kiểm tra redirect
+  if (!usernameInput && currentUrl !== loginUrl) {
+    // Trang đã redirect (ví dụ: /to-chuc → /dang-nhap), thử tìm lại trên trang hiện tại
+    console.log(`[Auth] Không tìm thấy form tại URL gốc, đang thử trên trang redirect: ${currentUrl}`);
+    await page.waitForTimeout(1000);
+    usernameInput = await findInputByLabelOrSelector(
+      page,
+      config.usernameLabel,
+      USERNAME_SELECTORS,
+    );
+  }
+
+  // Nếu vẫn không tìm thấy → tự dò URL login phổ biến
+  if (!usernameInput) {
+    const loginPatterns = ['/dang-nhap', '/login', '/signin', '/auth/login'];
+    const baseUrl = new URL(loginUrl).origin;
+    for (const pattern of loginPatterns) {
+      const candidateUrl = baseUrl + pattern;
+      if (candidateUrl === currentUrl) continue;
+      console.log(`[Auth] Đang thử tìm form đăng nhập tại: ${candidateUrl}`);
+      try {
+        await page.goto(candidateUrl, { timeout: 10000, waitUntil: 'domcontentloaded' });
+        await page.waitForTimeout(800);
+        usernameInput = await findInputByLabelOrSelector(
+          page,
+          config.usernameLabel,
+          USERNAME_SELECTORS,
+        );
+        if (usernameInput) {
+          console.log(`[Auth] ✅ Tìm thấy form đăng nhập tại: ${candidateUrl}`);
+          break;
+        }
+      } catch {
+        // Bỏ qua URL không truy cập được
+      }
+    }
+  }
+
   if (!usernameInput) {
     throw new AuthCaptureError(
       'LOGIN_FORM_NOT_FOUND',
-      `Không tìm thấy ô nhập username/email trên trang: ${loginUrl}. ` +
-      'Kiểm tra lại usernameLabel trong config hoặc URL trang đăng nhập.',
+      `Không tìm thấy ô nhập username/email.\n` +
+      `  URL nhập: ${loginUrl}\n` +
+      `  URL hiện tại: ${currentUrl}\n` +
+      `  Gợi ý: Hãy nhập đúng URL trang đăng nhập (ví dụ: .../dang-nhap)`,
     );
   }
   await usernameInput.fill(config.username ?? '');

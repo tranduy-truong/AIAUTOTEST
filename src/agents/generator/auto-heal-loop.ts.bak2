@@ -1,0 +1,160 @@
+import fs from 'fs';
+import path from 'path';
+import { execSync } from 'child_process';
+import { runGenerator } from './run.js';
+import { classifyFailure, HealerDiagnosis } from '../healer/run.js';
+import { loadStructuredE2EPlan } from '../planner/run.js';
+import { plannerPlanToTestCases } from '../planner/schema.js';
+import { buildCompactDomReport, runLive } from '../crawler/live-runner.js';
+import { buildActionPlan } from '../../core/action-plan.js';
+import { createNoAuthSession, loadAuthSession } from '../../core/auth/auth-session.js';
+import { artifact, detail, section, success, warning, error as uiError } from '../../core/cli-ui.js';
+
+export interface AutoHealLoopResult {
+  success: boolean;
+  attempts: number;
+  reason?: string;
+  reportPath?: string;
+}
+
+export async function runAutoHealGeneratorLoop(
+  level: 'e2e' | 'integration' | 'unit',
+  options: { maxAttempts?: number; targetFile?: string } = {},
+): Promise<AutoHealLoopResult> {
+  const maxAttempts = options.maxAttempts ?? 3;
+  let attempt = 1;
+  let activeSpecFilePath: string | undefined;
+
+  section('02', 'Generator & Auto-Healer Loop', `Tự động sinh code, chạy test & vá lỗi (Tối đa ${maxAttempts} lần)`);
+
+  while (attempt <= maxAttempts) {
+    console.log(`\n🔄 [Auto-Heal Loop] Lần chạy thứ ${attempt}/${maxAttempts}...`);
+
+    // Bước 1: Sinh / Cập nhật code Playwright (Ghi đè trực tiếp lên 1 file duy nhất khi Retry)
+    console.log(`   [1/3] Đang sinh/cập nhật code kiểm thử (${level})...`);
+    const genResult = await runGenerator(level, options.targetFile, {
+      exactFilePath: activeSpecFilePath,
+    });
+
+    if (!genResult) {
+      uiError(`   ❌ Generator không thể sinh code ở lần thử ${attempt}.`);
+      return { success: false, attempts: attempt, reason: 'GENERATOR_FAILED' };
+    }
+
+    if (typeof genResult === 'string') {
+      activeSpecFilePath = genResult;
+    }
+
+    // Bước 2: Tự động khởi chạy kiểm thử thực tế đối với DUY NHẤT file spec đang active
+    console.log(`   [2/3] Đang chạy kiểm thử tự động với Playwright...`);
+    let testOutput = '';
+    let testPassed = false;
+
+    try {
+      const normalizedPath = activeSpecFilePath?.replace(/\\/g, '/');
+      const targetCmd = normalizedPath ? `"${normalizedPath}"` : '';
+      const cmd = level === 'e2e'
+        ? `npx playwright test ${targetCmd}`.trim()
+        : level === 'unit'
+          ? `npm run test:unit ${targetCmd}`.trim()
+          : `npm run test:integration ${targetCmd}`.trim();
+
+      testOutput = execSync(cmd, { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
+      testPassed = true;
+    } catch (err: any) {
+      testOutput = (err.stdout || '') + '\n' + (err.stderr || '');
+      testPassed = false;
+    }
+
+    // Bước 3: Nếu test PASS 100% -> Kết thúc thành công!
+    if (testPassed) {
+      success(`   🎉 Tất cả test cases đã PASSED hoàn toàn ở lần thử thứ ${attempt}!`);
+      return { success: true, attempts: attempt };
+    }
+
+    // Bước 4: Phân loại nguyên nhân thất bại
+    console.log(`   [3/3] Phát hiện lỗi kiểm thử. Đang phân loại nguyên nhân...`);
+    const diagnosis: HealerDiagnosis = classifyFailure(testOutput);
+
+    detail('Loại lỗi', diagnosis.category);
+    detail('Mã chẩn đoán', diagnosis.reasonCode);
+    detail('Khả năng sửa lỗi', diagnosis.canSelfHeal ? 'Có thể tự vá lỗi (DOM/Locator)' : 'Lỗi Expected/Nghiệp vụ - Dừng an toàn');
+
+    // Trường hợp 4A: Lỗi Sai Expected / Nghiệp vụ -> DỪNG AN TOÀN & XUẤT BÁO CÁO REPORT.MD
+    if (!diagnosis.canSelfHeal || diagnosis.category === 'ASSERTION_ERROR') {
+      warning('   🛑 DỪNG AN TOÀN: Phát hiện kết quả thực tế khác Expected đã lập (Sai quy trình/Lỗi sản phẩm).');
+      console.log('   Không tự ý thay đổi Expected Result. Đang tạo tệp báo cáo artifacts/report.md...');
+
+      const reportContent = `
+# BÁO CÁO PHÂN TÍCH LỖI NGHIỆP VỤ - ${new Date().toLocaleString('vi-VN')}
+
+- **Cấp độ test**: ${level.toUpperCase()}
+- **Trạng thái**: DỪNG AN TOÀN (Bảo vệ Expected Result)
+- **Lần phát hiện**: Lần thử thứ ${attempt}
+- **Loại lỗi**: ${diagnosis.category} (${diagnosis.reasonCode})
+
+---
+
+## ❌ Log lỗi chi tiết từ Playwright:
+
+\`\`\`
+${testOutput.trim()}
+\`\`\`
+
+---
+
+## 💡 Đề xuất & Khuyến nghị:
+- Hệ thống đã tự động dừng để không ghi đè expected result nghiệp vụ.
+- Vui lòng kiểm tra lại tính đúng đắn của tính năng trên môi trường thực tế hoặc cập nhật kịch bản kiểm thử ban đầu.
+`.trim();
+
+      if (!fs.existsSync('artifacts')) fs.mkdirSync('artifacts', { recursive: true });
+      fs.writeFileSync('artifacts/report.md', reportContent, 'utf-8');
+      artifact('Báo cáo phân tích lỗi', 'artifacts/report.md');
+
+      return {
+        success: false,
+        attempts: attempt,
+        reason: 'ASSERTION_EXPECTED_MISMATCH',
+        reportPath: 'artifacts/report.md',
+      };
+    }
+
+    // Trường hợp 4B: Lỗi Locator / Element not found / Timeout -> Recrawl DOM & Lặp lại
+    if (attempt < maxAttempts) {
+      console.log(`   🔧 Phát hiện lỗi cào dữ liệu hoặc bất đồng bộ DOM (${diagnosis.reasonCode}).`);
+
+      // 4B-1: Nếu là lỗi bất đồng bộ SPA Navigation Timeout (TIMING_OR_ASYNC), tự vá mã Playwright ngay trên file spec
+      if (activeSpecFilePath && fs.existsSync(activeSpecFilePath) && diagnosis.category === 'TIMING_OR_ASYNC') {
+        console.log('   ⚡ Tự động tối ưu câu lệnh bất đồng bộ SPA Navigation ({ noWaitAfter: true }) trên file spec...');
+        let specCode = fs.readFileSync(activeSpecFilePath, 'utf-8');
+        specCode = specCode.replace(/\.click\(\)/g, '.click({ noWaitAfter: true })');
+        specCode = specCode.replace(/\.waitForURL\(([^)]+)\)(?!\.catch)/g, '.waitForURL($1).catch(() => {})');
+        fs.writeFileSync(activeSpecFilePath, specCode, 'utf-8');
+      }
+
+      // 4B-2: Live Crawler cào lại DOM và cập nhật Action Plan
+      console.log(`   Đang kích hoạt Live Crawler cào lại DOM thực tế và cập nhật Action Plan...`);
+      try {
+        const planPath = 'artifacts/test-plan-e2e.json';
+        if (fs.existsSync(planPath)) {
+          const parsedCases = plannerPlanToTestCases(loadStructuredE2EPlan(planPath));
+          const authSession = loadAuthSession() ?? createNoAuthSession();
+          const snapshotsMap = await runLive(parsedCases, authSession);
+          fs.writeFileSync('artifacts/crawled-dom.md', buildCompactDomReport(snapshotsMap));
+          buildActionPlan(parsedCases, snapshotsMap);
+          console.log('   ✅ Đã cập nhật lại artifacts/action-plan.json với Locator mới.');
+        }
+      } catch (err: any) {
+        warning(`   ⚠️ Không thể recrawl DOM: ${err.message}`);
+      }
+
+      attempt++;
+    } else {
+      break;
+    }
+  }
+
+  uiError(`   ❌ Đã vượt quá số lần thử lại tối đa (${maxAttempts} lần).`);
+  return { success: false, attempts: maxAttempts, reason: 'MAX_RETRIES_EXCEEDED' };
+}

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Auth Session — Kiểu dữ liệu và thao tác lưu/đọc phiên xác thực Playwright.
  *
  * Hỗ trợ 3 chiến lược:
@@ -109,10 +109,20 @@ export function loadAuthConfig(filePath = CI_CONFIG_PATH): AuthConfig | null {
   }
 }
 
-/** Kiểm tra session có còn hợp lệ không (file tồn tại + đúng strategy). */
+/** Thời gian tối đa một session được coi là hợp lệ (mặc định: 30 phút). */
+export const SESSION_MAX_AGE_MS = 30 * 60 * 1000;
+
+/** Kiểm tra session có còn hợp lệ không (file tồn tại + chưa hết hạn + đúng strategy). */
 export function isAuthSessionValid(session: AuthSession | null): boolean {
   if (!session) return false;
   if (session.strategy === 'NONE') return true;
+
+  // Kiểm tra thời gian sống — nếu session quá cũ → coi như hết hạn
+  if (session.capturedAt) {
+    const age = Date.now() - new Date(session.capturedAt).getTime();
+    if (age > SESSION_MAX_AGE_MS) return false;
+  }
+
   if (session.strategy === 'PLAYWRIGHT_STORAGE_STATE') {
     return !!(session.storageStatePath && fs.existsSync(session.storageStatePath));
   }

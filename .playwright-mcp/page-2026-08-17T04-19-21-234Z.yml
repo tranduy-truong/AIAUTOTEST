@@ -1,0 +1,101 @@
+- generic [ref=f1e1]:
+  - generic [ref=f1e40]:
+    - generic [ref=f1e47]:
+      - button "logo Sở Dân Tộc - Tôn Giáo" [ref=f1e609] [cursor=pointer]:
+        - img "logo" [ref=f1e610]
+        - generic [ref=f1e51]: Sở Dân Tộc - Tôn Giáo
+      - list [ref=f1e53]:
+        - listitem [ref=f1e55]:
+          - button "Tôn giáo" [expanded] [ref=f1e611] [cursor=pointer]
+          - list [ref=f1e64]:
+            - listitem [ref=f1e65]:
+              - generic [ref=f1e66] [cursor=pointer]: Tổ chức
+            - listitem [ref=f1e67]:
+              - generic [ref=f1e68] [cursor=pointer]: Cơ sở
+            - listitem [ref=f1e69]:
+              - generic [ref=f1e70] [cursor=pointer]: Nhân sự
+            - listitem [ref=f1e71]:
+              - generic [ref=f1e72] [cursor=pointer]: Cơ sở đào tạo
+        - listitem [ref=f1e74]:
+          - button "Tín ngưỡng" [ref=f1e612] [cursor=pointer]
+        - listitem [ref=f1e80]:
+          - button "Danh mục" [ref=f1e613] [cursor=pointer]
+        - listitem [ref=f1e85]:
+          - button "Xét duyệt" [ref=f1e614] [cursor=pointer]
+        - listitem [ref=f1e92]:
+          - button "Hệ thống" [ref=f1e615] [cursor=pointer]
+    - main [ref=f1e99]:
+      - generic [ref=f1e100]:
+        - generic [ref=f1e101]:
+          - button "Toggle Sidebar" [ref=f1e616] [cursor=pointer]
+          - separator [ref=f1e104]
+          - navigation "breadcrumb" [ref=f1e617]:
+            - list [ref=f1e106]:
+              - listitem [ref=f1e107]:
+                - generic [ref=f1e108]: Tôn giáo
+              - listitem [ref=f1e109]
+              - listitem [ref=f1e112]:
+                - link "Cơ sở" [disabled] [ref=f1e618]
+        - button "AD" [ref=f1e619] [cursor=pointer]
+      - generic [ref=f1e117]:
+        - generic [ref=f1e118]:
+          - button "Tìm kiếm 1" [active] [ref=f1e620] [cursor=pointer]:
+            - text: Tìm kiếm
+            - generic [ref=f1e621]: "1"
+          - button "Thêm" [ref=f1e622] [cursor=pointer]
+        - generic [ref=f1e122]:
+          - table [ref=f1e125]:
+            - rowgroup [ref=f1e126]:
+              - row [ref=f1e623]:
+                - columnheader "Mã cơ sở" [ref=f1e624]
+                - columnheader "Tên cơ sở" [ref=f1e625]
+                - columnheader "Tổ chức quản lý" [ref=f1e626]
+                - columnheader "Tên thường gọi" [ref=f1e627]
+                - columnheader "Loại hình cơ sở" [ref=f1e628]
+                - columnheader "Thực trạng" [ref=f1e629]
+                - columnheader "Loại hình di tích" [ref=f1e630]
+                - columnheader "Cấp di tích" [ref=f1e631]
+                - columnheader "Địa chỉ chi tiết" [ref=f1e632]
+                - columnheader "Tỉnh/Thành phố" [ref=f1e633]
+                - columnheader "Xã/Phường" [ref=f1e634]
+                - columnheader "Số điện thoại" [ref=f1e635]
+                - columnheader "Email" [ref=f1e636]
+                - columnheader "Website" [ref=f1e637]
+                - columnheader "Ngày thành lập" [ref=f1e638]
+                - columnheader "Thao tác" [ref=f1e639]
+            - rowgroup [ref=f1e144]:
+              - row [ref=f1e640]:
+                - cell "CSTG008" [ref=f1e641]
+                - cell "Chùa Một C" [ref=f1e642]
+                - cell "BTS GHPGVN TP. Hồ Chí Minh333" [ref=f1e643]
+                - cell "Chùa Một Cột" [ref=f1e644]
+                - cell [ref=f1e645]
+                - cell [ref=f1e646]
+                - cell [ref=f1e647]
+                - cell [ref=f1e648]
+                - cell "Phố Chùa Một Cột, Đội Cấn, Ba Đình, Hà Nội" [ref=f1e649]
+                - cell "Thành phố Hà Nội" [ref=f1e650]
+                - cell [ref=f1e651]
+                - cell "02438463918" [ref=f1e652]
+                - cell [ref=f1e653]
+                - cell [ref=f1e654]
+                - cell "01/01/1049" [ref=f1e655]
+                - cell [ref=f1e656]:
+                  - generic [ref=f1e657]:
+                    - link [ref=f1e658] [cursor=pointer]:
+                      - /url: /qly-dttg/quan-tri/ton-giao/co-so/CSTG008
+                      - button [ref=f1e659]
+                    - button [ref=f1e660] [cursor=pointer]
+                    - button [ref=f1e661] [cursor=pointer]
+          - generic [ref=f1e388]:
+            - generic [ref=f1e389]: Tổng 1 dòng
+            - generic [ref=f1e390]:
+              - generic [ref=f1e391]: Số dòng/trang
+              - combobox [ref=f1e392] [cursor=pointer]:
+                - generic [ref=f1e393]: "20"
+                - img: ▼
+              - textbox [ref=f1e394]: "20"
+      - generic:
+        - img "trong dong"
+  - region "Notifications alt+T"
+  - alert [ref=f1e39]

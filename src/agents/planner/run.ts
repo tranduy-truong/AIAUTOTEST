@@ -220,14 +220,14 @@ async function callPlannerAdapter(taskContent: string, suffix = '') {
       promptDir: workDir,
       workDir,
       timeoutMs: 120000,
-      maxTokens: 3500,
+      maxTokens: 3000,
     });
-    if (result.ok || !/rate.limit|tokens per minute|tpm/i.test(result.rawOutput) || attempt === 4) {
+    if (result.ok || !/rate.limit|tokens per minute|tpm|429|413|rate_limit_exceeded|too many requests/i.test(result.rawOutput) || attempt === 4) {
       return result;
     }
 
-    const waitMs = attempt * 12000;
-    console.warn(`   Groq dang gioi han TPM; tu dong cho ${waitMs / 1000}s roi thu lai (${attempt}/4)...`);
+    const waitMs = attempt * 15000;
+    console.warn(`   Groq đang giới hạn TPM (12,000 tokens/phút); tự động chờ ${waitMs / 1000}s rồi thử lại (${attempt}/4)...`);
     await new Promise(resolve => setTimeout(resolve, waitMs));
   }
   return { ok: false, rawOutput: 'Planner retry loop ended unexpectedly.' };
@@ -321,6 +321,207 @@ async function runStructuredE2EPlanner(
   console.log(`✅ Đã lập xong kế hoạch có cấu trúc! Lưu tại: ${E2E_JSON_PATH}`);
   console.log(`   Bản đọc cho tester: ${E2E_MARKDOWN_PATH}`);
   return true;
+}
+
+// ─── Discovery Mode: AI Planner tự sinh kịch bản từ DOM đã cào ──────────────
+
+export interface DiscoveryAuthInfo {
+  loginUrl: string;
+  username: string;
+  password: string;
+  usernameLabel?: string;
+  passwordLabel?: string;
+}
+
+function buildAuthPreamble(auth: DiscoveryAuthInfo): string {
+  const uLabel = auth.usernameLabel || 'Nhập tên đăng nhập';
+  const pLabel = auth.passwordLabel || 'Nhập mật khẩu';
+  return [
+    '',
+    '[THÔNG TIN ĐĂNG NHẬP - BẮT BUỘC]',
+    `URL đăng nhập: ${auth.loginUrl}`,
+    `Username: ${auth.username}`,
+    `Password: ${auth.password}`,
+    `Label ô username: ${uLabel}`,
+    `Label ô password: ${pLabel}`,
+    '',
+    'QUAN TRỌNG: Mọi test case đều PHẢI bắt đầu bằng 5 bước đăng nhập sau (chính xác từng trường JSON):',
+    '```json',
+    `[`,
+    `  { "type": "goto", "url": "${auth.loginUrl}", "raw": "Mở trang đăng nhập" },`,
+    `  { "type": "fill", "target": "${uLabel}", "value": "${auth.username}", "raw": "Nhập tên đăng nhập" },`,
+    `  { "type": "fill", "target": "${pLabel}", "value": "${auth.password}", "raw": "Nhập mật khẩu" },`,
+    `  { "type": "click", "target": "Đăng nhập", "raw": "Bấm nút Đăng nhập" },`,
+    `  { "type": "check", "assertions": [{ "kind": "url_not_contains", "value": "dang-nhap" }], "raw": "Kiểm tra URL không còn chứa dang-nhap" }`,
+    `]`,
+    '```',
+    'Sau 5 bước đăng nhập này, mới tiếp tục thêm bước goto đến trang đích và các bước kiểm thử chức năng.',
+    '',
+  ].join('\n');
+}
+
+async function runDiscoveryE2EPlanner(
+  discoveryReport: string,
+  authInfo?: DiscoveryAuthInfo,
+): Promise<boolean> {
+  console.log(`\n🧠 [AI Planner - Discovery Mode] Đang phân tích toàn bộ element và sinh kế hoạch kiểm thử (1 lần chạy)...`);
+
+  const promptFilePath = path.join(__dirname, 'prompt-e2e-discovery.md');
+  if (!fs.existsSync(promptFilePath)) {
+    console.error(`❌ Không tìm thấy file prompt: ${promptFilePath}`);
+    return false;
+  }
+  const systemPrompt = fs.readFileSync(promptFilePath, 'utf-8');
+
+  ensureArtifactsDir();
+  for (const stalePath of [
+    E2E_JSON_PATH,
+    E2E_MARKDOWN_PATH,
+    'artifacts/action-plan.json',
+    'artifacts/crawled-dom.md',
+    'artifacts/unresolved-actions.json',
+  ]) {
+    fs.rmSync(stalePath, { force: true });
+  }
+
+  // Ưu tiên chạy 1 lần duy nhất cho toàn bộ báo cáo để tiết kiệm tối đa token và RPM
+  // Chỉ chia lô khi dữ liệu cực lớn (> 80,000 ký tự)
+  const chunks = discoveryReport.length > 80000
+    ? splitDiscoveryReport(discoveryReport, 70000)
+    : [discoveryReport];
+
+  if (chunks.length > 1) {
+    console.log(`   Báo cáo Discovery rất lớn (${discoveryReport.length} ký tự), được chia thành ${chunks.length} lô.`);
+  }
+
+  const chunkPlans: StructuredE2EPlan[] = [];
+  const allIssues: PlannerValidationIssue[] = [];
+  const rawOutputs: string[] = [];
+
+  for (const [index, chunk] of chunks.entries()) {
+    if (chunks.length > 1) {
+      console.log(`   Planner đang phân tích lô ${index + 1}/${chunks.length}...`);
+      if (index > 0) {
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      }
+    }
+
+    const authPreamble = authInfo ? buildAuthPreamble(authInfo) : '';
+    const task = `${systemPrompt}\n\n---\n${authPreamble}\n[BÁO CÁO DISCOVERY CRAWLER - DANH SÁCH ELEMENT THỰC TẾ]\n${chunk.trim()}\n\n[HẾT BÁO CÁO]\n\nHãy sinh kịch bản kiểm thử E2E đầy đủ dựa trên các element trên. Chỉ xuất JSON object đúng schema.`;
+
+    let result = await callPlannerAdapter(task, chunks.length > 1 ? `_discovery_${index + 1}` : '_discovery');
+    if (!result.ok) {
+      allIssues.push({ code: 'AI_API_ERROR', message: result.rawOutput });
+      rawOutputs.push(result.rawOutput);
+      continue;
+    }
+
+    let validation = validationIssuesForDiscovery(result.rawOutput);
+    if (!validation.plan || validation.issues.length > 0) {
+      console.warn(`   Output chưa đạt chuẩn (${validation.issues.length} lỗi), đang tự sửa một lần...`);
+      const repairTask = `${task}\n\n[LỖI CẦN TRÁNH]\n${JSON.stringify(validation.issues.slice(0, 15))}\n\nTạo lại JSON từ báo cáo gốc, sửa mọi lỗi trên.`;
+      const repair = await callPlannerAdapter(repairTask, chunks.length > 1 ? `_discovery_${index + 1}_repair` : '_discovery_repair');
+      if (repair.ok) {
+        result = repair;
+        validation = validationIssuesForDiscovery(result.rawOutput);
+      }
+    }
+
+    rawOutputs.push(result.rawOutput);
+    if (validation.plan && validation.issues.length === 0) chunkPlans.push(validation.plan);
+    allIssues.push(...validation.issues);
+  }
+
+  const mergedPlan = chunkPlans.length > 0
+    ? mergeStructuredPlans(chunkPlans)
+    : null;
+
+  if (!mergedPlan || mergedPlan.testCases.length === 0) {
+    fs.writeFileSync(E2E_INVALID_PATH, rawOutputs.join('\n\n--- CHUNK ---\n\n').trim() + '\n');
+    if (allIssues.length > 0) {
+      fs.writeFileSync(E2E_ERRORS_PATH, JSON.stringify(allIssues, null, 2) + '\n');
+    }
+    console.error(`❌ Discovery Planner không sinh được kế hoạch hợp lệ.`);
+    for (const issue of allIssues.slice(0, 10)) {
+      console.error(`   - ${issue.message}`);
+    }
+    return false;
+  }
+
+  fs.writeFileSync(E2E_JSON_PATH, JSON.stringify(mergedPlan, null, 2) + '\n');
+  fs.writeFileSync(E2E_MARKDOWN_PATH, renderStructuredPlanMarkdown(mergedPlan));
+  fs.rmSync(E2E_INVALID_PATH, { force: true });
+  fs.rmSync(E2E_ERRORS_PATH, { force: true });
+
+  const totalSteps = mergedPlan.testCases.reduce((sum, tc) => sum + tc.steps.length, 0);
+  console.log(`✅ Đã lập xong kế hoạch: ${mergedPlan.testCases.length} test cases, ${totalSteps} bước.`);
+  console.log(`   Lưu tại: ${E2E_JSON_PATH}`);
+  console.log(`   Bản đọc cho tester: ${E2E_MARKDOWN_PATH}`);
+  return true;
+}
+
+function validationIssuesForDiscovery(
+  rawOutput: string,
+): { plan: StructuredE2EPlan | null; issues: PlannerValidationIssue[] } {
+  const plan = normalizePlannerOutput(rawOutput);
+  if (!plan) {
+    return {
+      plan: null,
+      issues: [{ code: 'INVALID_JSON', message: 'Planner không trả về một JSON object hợp lệ.' }],
+    };
+  }
+  // Discovery mode: chỉ validate cấu trúc cơ bản, không đối chiếu sourceScript
+  const issues: PlannerValidationIssue[] = [];
+  for (const tc of plan.testCases) {
+    if (!tc.id || !tc.name) {
+      issues.push({ code: 'MISSING_FIELD', testCaseId: tc.id, message: `Test case thiếu id hoặc name.` });
+    }
+    if (!tc.steps || tc.steps.length === 0) {
+      issues.push({ code: 'NO_STEPS', testCaseId: tc.id, message: `Test case ${tc.id} không có bước nào.` });
+    }
+    for (const [i, step] of (tc.steps || []).entries()) {
+      if (!step.type) {
+        issues.push({ code: 'MISSING_STEP_TYPE', testCaseId: tc.id, stepIndex: i + 1, message: `Bước ${i + 1} thiếu type.` });
+      }
+      if (step.type === 'goto' && !step.url) {
+        issues.push({ code: 'MISSING_URL', testCaseId: tc.id, stepIndex: i + 1, message: `Bước goto thiếu url.` });
+      }
+      if (step.type === 'fill' && (!step.target || step.value === undefined)) {
+        issues.push({ code: 'MISSING_FILL_DATA', testCaseId: tc.id, stepIndex: i + 1, message: `Bước fill thiếu target hoặc value.` });
+      }
+      if (step.type === 'check' && (!step.assertions || step.assertions.length === 0)) {
+        issues.push({ code: 'MISSING_ASSERTIONS', testCaseId: tc.id, stepIndex: i + 1, message: `Bước check thiếu assertions.` });
+      }
+    }
+  }
+  return { plan, issues };
+}
+
+function splitDiscoveryReport(report: string, maxChars = 25000): string[] {
+  if (report.length <= maxChars) return [report];
+
+  // Chia theo section ## (mỗi trang 1 section)
+  const sections = report.split(/(?=^## )/m);
+  const header = sections[0]; // Phần header chung
+  const pageSections = sections.slice(1);
+
+  if (pageSections.length <= 1) return [report];
+
+  const chunks: string[] = [];
+  let currentChunk = header;
+
+  for (const section of pageSections) {
+    if ((currentChunk + section).length > maxChars && currentChunk !== header) {
+      chunks.push(currentChunk.trim());
+      currentChunk = header;
+    }
+    currentChunk += section;
+  }
+  if (currentChunk.trim() !== header.trim()) {
+    chunks.push(currentChunk.trim());
+  }
+
+  return chunks.length > 0 ? chunks : [report];
 }
 
 function createUnitTask(
@@ -509,6 +710,13 @@ async function runStructuredUnitPlanner(
   ], plannedTargets.length === context.targets.length ? 'success' : 'warning');
   success('Kế hoạch Unit Test đã sẵn sàng.');
   return true;
+}
+
+export async function runDiscoveryPlanner(
+  discoveryReport: string,
+  authInfo?: DiscoveryAuthInfo,
+): Promise<boolean> {
+  return runDiscoveryE2EPlanner(discoveryReport, authInfo);
 }
 
 export async function runPlanner(

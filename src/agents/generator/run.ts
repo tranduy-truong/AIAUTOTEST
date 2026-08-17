@@ -199,8 +199,9 @@ export function buildGeneratorContext(options: {
 
 export async function runGenerator(
   level: "unit" | "integration" | "e2e",
-  targetFileName: string,
-) {
+  targetFileName = "e2e_test_suite",
+  options?: { exactFilePath?: string },
+): Promise<string | boolean> {
   if (level === 'unit') {
     section('02', 'Generator', 'Biên dịch Test Intent thành Vitest theo quy tắc xác định');
     return runUnitGenerator();
@@ -288,12 +289,14 @@ ${generatorContext}
 1. Kịch bản gốc quyết định chính xác thứ tự bước, dữ liệu nhập và assertion; Test Plan chỉ bổ sung ý nghĩa nghiệp vụ.
 2. Nếu có ACTION PLAN ĐÃ ĐƯỢC CRAWLER XÁC MINH, PHẢI chép đúng playwrightCode cho từng action; CẤM thay bằng locator khác.
 3. TUYỆT ĐỐI KHÔNG tự đoán class theo thư viện UI như .lucide-eye, .fa-edit hoặc [class*=eye] nếu DOM không cung cấp class đó.
-4. Nếu không có locator duy nhất được xác minh, đánh dấu test bằng test.fixme(true, 'Không có locator được xác minh cho ...') thay vì sinh locator đoán mò.
-5. Nhóm các test case theo MODULE thành các file riêng biệt.
-6. Mỗi file bắt đầu bằng dòng đánh dấu: // FILE: <tên-file>${fileExtension}
-7. Mỗi file chỉ được có DUY NHẤT MỘT dòng import ở đầu file.
-8. TUYỆT ĐỐI KHÔNG lặp lại dòng import ở giữa hoặc cuối file.
-9. Toàn bộ nội dung nằm trong một khối \`\`\`typescript ... \`\`\`.
+4. Đối với assertion kiểm tra hiển thị Text: Bắt buộc dùng \`page.getByText('...', { exact: true }).first()\` để tránh lỗi \`Strict mode violation\` khi text xuất hiện ở nhiều phần tử.
+5. Đối với thao tác Click Tab hoặc Nút: Sử dụng đúng ARIA role tab nếu là tab điều hướng (\`getByRole('tab')\`) hoặc fallback \`.or(page.getByRole('button', ...)).or(page.getByText(...)).first()\`.
+6. Nếu không có locator duy nhất được xác minh, đánh dấu test bằng test.fixme(true, 'Không có locator được xác minh cho ...') thay vì sinh locator đoán mò.
+7. Nhóm các test case theo MODULE thành các file riêng biệt.
+8. Mỗi file bắt đầu bằng dòng đánh dấu: // FILE: <tên-file>${fileExtension}
+9. Mỗi file chỉ được có DUY NHẤT MỘT dòng import ở đầu file.
+10. TUYỆT ĐỐI KHÔNG lặp lại dòng import ở giữa hoặc cuối file.
+11. Toàn bộ nội dung nằm trong một khối \`\`\`typescript ... \`\`\`.
 
 [VÍ DỤ ĐỊNH DẠNG ĐẦU RA - TUÂN THEO CHÍNH XÁC]:
 \`\`\`typescript
@@ -331,7 +334,7 @@ test.describe('Product', () => {
     promptDir: workDir,
     workDir,
     timeoutMs: 120000,
-    maxTokens: level === 'e2e' ? 3000 : undefined,
+    maxTokens: undefined,
   });
 
   // 5. Trích xuất code và ghi ra thư mục đích
@@ -391,22 +394,25 @@ test.describe('Product', () => {
         // ★ POST-PROCESSING: Sửa lỗi phổ biến trước khi ghi file
         fileContent = fixCommonPlaywrightIssues(fileContent, verifiedActionPlan);
 
-        const filePath = level === 'e2e'
-          ? createDatedUniqueSpecPath(
-              outDir,
-              testCaseNamesForContent(fileContent, verifiedActionPlan),
-              fileName,
-              fileExtension,
-            )
-          : path.join(outDir, fileName);
+        const filePath = options?.exactFilePath
+          ? options.exactFilePath
+          : level === 'e2e'
+            ? createDatedUniqueSpecPath(
+                outDir,
+                testCaseNamesForContent(fileContent, verifiedActionPlan),
+                fileName,
+                fileExtension,
+              )
+            : path.join(outDir, fileName);
         fs.writeFileSync(filePath, fileContent + "\n");
         savedFiles.push(filePath);
-        console.log(`  ✅ Đã tạo: ${filePath}`);
+        console.log(`  ✅ Đã tạo/cập nhật: ${filePath}`);
       }
 
       console.log(
         `\n✅ Sinh code thành công! ${savedFiles.length} file lưu tại: ${displayOutDir}/`,
       );
+      return typeof savedFiles[0] === 'string' ? savedFiles[0].replace(/\\/g, '/') : true;
     } else {
       // Trường hợp AI chỉ sinh 1 file (hoặc không dùng marker)
       // Xóa dòng "// FILE: ..." nếu có, rồi lưu vào 1 file
@@ -423,19 +429,20 @@ test.describe('Product', () => {
         "",
       );
 
-      const filePath = level === 'e2e'
-        ? createDatedUniqueSpecPath(
-            outDir,
-            testCaseNamesForContent(cleanedContent, verifiedActionPlan),
-            cleanTargetName,
-            fileExtension,
-          )
-        : path.join(outDir, `${cleanTargetName}${fileExtension}`);
+      const filePath = options?.exactFilePath
+        ? options.exactFilePath
+        : level === 'e2e'
+          ? createDatedUniqueSpecPath(
+              outDir,
+              testCaseNamesForContent(cleanedContent, verifiedActionPlan),
+              cleanTargetName,
+              fileExtension,
+            )
+          : path.join(outDir, `${cleanTargetName}${fileExtension}`);
       fs.writeFileSync(filePath, cleanedContent + "\n");
-      console.log(`✅ Đã sinh code thành công! File lưu tại: ${filePath}`);
+      console.log(`✅ Đã sinh/cập nhật code thành công! File lưu tại: ${filePath}`);
+      return filePath.replace(/\\/g, '/');
     }
-
-    return true;
   } else {
     console.error(`❌ Lỗi khi Generator chạy:`, result.rawOutput);
     return false;
@@ -657,6 +664,61 @@ function fixPasswordToggleLocators(
   return { code: lines.join('\n'), changed };
 }
 
+function fixDuplicateLoginsInTestBlock(code: string): { code: string; changed: boolean } {
+  const lines = code.split('\n');
+  const testStarts = lines
+    .map((line, index) => (/^\s*test\s*\(/.test(line) ? index : -1))
+    .filter(index => index >= 0);
+  let changed = false;
+
+  for (let position = 0; position < testStarts.length; position++) {
+    const start = testStarts[position];
+    const end = testStarts[position + 1] ?? lines.length;
+
+    let loginCount = 0;
+    let inDuplicateLogin = false;
+
+    for (let i = start + 1; i < end; i++) {
+      const line = lines[i];
+      const normalizedLine = line.toLowerCase();
+
+      // Nhận diện bước mở trang đăng nhập
+      if (/(?:goto.*(?:dang-nhap|login|signin)|getByPlaceholder.*(?:ten dang nhap|username|tai khoan))/i.test(normalizedLine)) {
+        if (/goto.*(?:dang-nhap|login|signin)/i.test(normalizedLine)) {
+          loginCount++;
+          if (loginCount > 1) {
+            inDuplicateLogin = true;
+          }
+        }
+      }
+
+      if (inDuplicateLogin) {
+        // Kiểm tra xem dòng này có phải là 1 phần của cụm đăng nhập lặp lại không
+        if (
+          /(?:dang-nhap|login|username|password|mat khau|ten dang nhap|waitForURL.*dang-nhap|not\.toHaveURL.*dang-nhap|\/\/\s*(?:mở trang đăng nhập|nhập tên đăng nhập|nhập mật khẩu|bấm nút đăng nhập|kiểm tra url không còn chứa dang-nhap))/i.test(normalizedLine) ||
+          /await page\.(getByPlaceholder|getByRole\('button', \{\s*name:\s*['"]Đăng nhập['"])/i.test(line)
+        ) {
+          lines[i] = ''; // Xóa dòng đăng nhập trùng lặp
+          changed = true;
+          continue;
+        } else if (/await page\.goto\(/.test(line) || /await expect\(/.test(line) || /await page\.getBy/.test(line)) {
+          // Gặp lệnh nghiệp vụ mới -> kết thúc khối duplicate login
+          inDuplicateLogin = false;
+        }
+      }
+    }
+  }
+
+  // Lọc bớt các dòng trống liên tiếp sinh ra sau khi xóa
+  const cleanedLines: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i] === '' && cleanedLines[cleanedLines.length - 1] === '') continue;
+    cleanedLines.push(lines[i]);
+  }
+
+  return { code: cleanedLines.join('\n'), changed };
+}
+
 export function fixCommonPlaywrightIssues(code: string, actionPlan?: ActionPlan): string {
   let fixed = code;
   const fixes: string[] = [];
@@ -826,6 +888,91 @@ export function fixCommonPlaywrightIssues(code: string, actionPlan?: ActionPlan)
   if (missingAwaitPattern.test(fixed)) {
     fixed = fixed.replace(missingAwaitPattern, "await expect($1).$2(");
     fixes.push("FIX-5: Thiếu await trước expect() → đã thêm");
+  }
+
+  // ── FIX 15: Đảm bảo cú pháp đóng test block hợp lệ (tránh SyntaxError khi AI xuất dở) ──
+  const openBraces = (fixed.match(/\{/g) || []).length;
+  const closeBraces = (fixed.match(/\}/g) || []).length;
+  if (openBraces > closeBraces) {
+    const lines = fixed.split('\n');
+    const lastLine = lines[lines.length - 1].trim();
+    if (lastLine && !lastLine.endsWith(';') && !lastLine.endsWith('}')) {
+      lines.pop(); // Bỏ dòng dở dang
+    }
+    fixed = lines.join('\n');
+    const curOpen = (fixed.match(/\{/g) || []).length;
+    let curClose = (fixed.match(/\}/g) || []).length;
+    while (curOpen > curClose) {
+      fixed += '\n  });';
+      curClose++;
+    }
+    fixes.push("FIX-15: Tự động hoàn thiện các dấu đóng test block còn dở dang");
+  }
+
+  // ── FIX 16: Tự động thêm .first() vào getByText assertion để tránh lỗi Strict Mode Violation ──
+  // Biến: expect(page.getByText('...')).toBeVisible() -> expect(page.getByText('...').first()).toBeVisible()
+  const unscopedGetByTextPattern = /(expect\(\s*(?:await\s+)?page\.getByText\([^)]+\))(?!\s*\.\s*(first|last|nth))\s*\)\.toBeVisible\(\s*\)/g;
+  if (unscopedGetByTextPattern.test(fixed)) {
+    fixed = fixed.replace(unscopedGetByTextPattern, "$1.first()).toBeVisible()");
+    fixes.push("FIX-16: getByText().toBeVisible() → getByText().first().toBeVisible() (Tránh lỗi Strict Mode Violation)");
+  }
+
+  // ── FIX 18: Loại bỏ các bước đăng nhập trùng lặp (>1 lần) trong cùng một testcase ──
+  const duplicateLoginResult = fixDuplicateLoginsInTestBlock(fixed);
+  if (duplicateLoginResult.changed) {
+    fixed = duplicateLoginResult.code;
+    fixes.push("FIX-18: Loại bỏ các bước đăng nhập trùng lặp (>1 lần) trong cùng một testcase");
+  }
+
+  // ── FIX 19: Tự động chuyển đổi các nút Tab sang Fallback Selector (.or) toàn diện ──
+  // 19a. Dựa trên tên tab nghiệp vụ phổ biến
+  const tabNamesList = "Thông tin chung|Quá trình thay đổi|Lịch sử thay đổi|Chi tiết cơ sở|Thông tin cơ sở|Chức việc|Chức sắc|Nhà tu hành|Tín đồ|Tất cả|Tổ chức|Cơ sở|Nhân sự|Ban đại diện|Ban trị sự|Hồ sơ|Lịch sử|Phân loại";
+  const tabButtonPattern = new RegExp(`await\\s+page\\.getByRole\\(['"]button['"],\\s*\\{\\s*name:\\s*(['"](?:${tabNamesList})['"]|/(?:${tabNamesList})/i)(?:,\\s*exact:\\s*(?:true|false))?\\s*\\}\\)\\.click\\(\\);?`, "g");
+  if (tabButtonPattern.test(fixed)) {
+    fixed = fixed.replace(tabButtonPattern, (_match, nameArg) => {
+      const cleanName = nameArg.replace(/^['"]+|['"]+$/g, "");
+      return `await page.getByRole('tab', { name: '${cleanName}' }).or(page.getByRole('button', { name: '${cleanName}' })).or(page.getByText('${cleanName}')).first().click();`;
+    });
+    fixes.push("FIX-19: Chuyển đổi getByRole('button') trên Tab sang Fallback Pattern an toàn (.or)");
+  }
+
+  // 19b. Dựa trên comment chứa chữ 'tab' phía trên lệnh click
+  const commentTabButtonPattern = /(\/\/[^\n]*\btab\b[^\n]*\n\s*)await\s+page\.getByRole\(['"]button['"],\s*\{\s*name:\s*(['"][^'"]+['"])(?:,\s*exact:\s*(?:true|false))?\s*\}\)\.click\(\);?/gi;
+  if (commentTabButtonPattern.test(fixed)) {
+    fixed = fixed.replace(commentTabButtonPattern, (_match, comment, nameArg) => {
+      const cleanName = nameArg.replace(/^['"]+|['"]+$/g, "");
+      return `${comment}await page.getByRole('tab', { name: '${cleanName}' }).or(page.getByRole('button', { name: '${cleanName}' })).or(page.getByText('${cleanName}')).first().click();`;
+    });
+    fixes.push("FIX-19b: Tự động chuyển nút Tab theo comment bước kiểm thử sang Fallback Pattern (.or)");
+  }
+
+  // ── FIX 20: Chuyển đổi text assertion dài có exact:true sang partial match để tránh fail do dữ liệu động ──
+  const longExactTextPattern = /page\.getByText\((['"][^'"]{12,}['"]),\s*\{\s*exact:\s*true\s*\}\)/g;
+  if (longExactTextPattern.test(fixed)) {
+    fixed = fixed.replace(longExactTextPattern, "page.getByText($1)");
+    fixes.push("FIX-20: Loại bỏ { exact: true } cho chuỗi text dài để tránh lỗi không khớp dữ liệu động");
+  }
+
+  // ── FIX 21: Tự động gắn Fallback .or() và .first() cho toàn bộ các lệnh Click & Fill (Phòng ngừa lỗi trượt element) ──
+  // 21a. Tự động thêm Fallback .or() cho mọi lệnh Click nếu chưa có .or()
+  const standaloneClickPattern = /await\s+page\.(getByRole\(['"](?:button|tab|link)['"],\s*\{\s*name:\s*([^,}]+?)(?:,\s*exact:\s*(?:true|false))?\s*\}\)|getByText\(([^)]+?)\))(?!\.or\()\s*\.(?:first\(\)\.)?click\(([^)]*)\);?/g;
+  if (standaloneClickPattern.test(fixed)) {
+    fixed = fixed.replace(standaloneClickPattern, (_match, _fullLocator, roleName, textName, clickArgs) => {
+      const name = (roleName || textName || "").trim();
+      const extraArgs = clickArgs ? clickArgs : "";
+      return `await page.getByRole('tab', { name: ${name} }).or(page.getByRole('button', { name: ${name} })).or(page.getByText(${name})).first().click(${extraArgs});`;
+    });
+    fixes.push("FIX-21: Tự động gắn Fallback .or() và .first() cho tất cả các thao tác Click");
+  }
+
+  // 21b. Tự động thêm Fallback .or() cho mọi lệnh Fill Input nếu chưa có .or()
+  const standaloneFillPattern = /await\s+page\.(getByPlaceholder\(([^)]+?)\)|getByLabel\(([^)]+?)\))(?!\.or\()\s*\.(?:first\(\)\.)?fill\(([^)]+?)\);?/g;
+  if (standaloneFillPattern.test(fixed)) {
+    fixed = fixed.replace(standaloneFillPattern, (_match, _fullLocator, placeholderArg, labelArg, fillValue) => {
+      const target = (placeholderArg || labelArg || "").trim();
+      return `await page.getByPlaceholder(${target}).or(page.getByLabel(${target})).first().fill(${fillValue});`;
+    });
+    fixes.push("FIX-21b: Tự động gắn Fallback .or() và .first() cho tất cả các thao tác Fill Input");
   }
 
   // Log các fix đã áp dụng

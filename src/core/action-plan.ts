@@ -133,13 +133,30 @@ export function buildActionPlan(
             testCase.url || '',
             sharedSnapshots,
           );
-          playwrightCode = `await ${clickRes.locator || 'page.locator("unknown")'}.click();`;
+          const isSubmitOrNav =
+            /dang nhap|đăng nhập|submit|luu|lưu|save|login/i.test(step.target || '') ||
+            Boolean(beforeSnapshot && afterSnapshot && normalizedPageUrl(beforeSnapshot.url) !== normalizedPageUrl(afterSnapshot.url));
+
+          playwrightCode = isSubmitOrNav
+            ? `await ${clickRes.locator || 'page.locator("unknown")'}.click({ noWaitAfter: true });`
+            : `await ${clickRes.locator || 'page.locator("unknown")'}.click();`;
+
           if (
             beforeSnapshot &&
             afterSnapshot &&
             normalizedPageUrl(beforeSnapshot.url) !== normalizedPageUrl(afterSnapshot.url)
           ) {
-            playwrightCode += `\nawait page.waitForURL('${escapeSingleQuoted(afterSnapshot.url)}', { waitUntil: 'domcontentloaded' });`;
+            let targetPath = '';
+            try {
+              targetPath = new URL(afterSnapshot.url).pathname;
+            } catch {
+              targetPath = afterSnapshot.url;
+            }
+            if (targetPath && targetPath !== '/') {
+              playwrightCode += `\nawait page.waitForURL(url => url.href.includes('${escapeSingleQuoted(targetPath)}') || !url.href.includes('dang-nhap'), { timeout: 20000 }).catch(() => {});`;
+            } else {
+              playwrightCode += `\nawait page.waitForURL(url => !url.href.includes('dang-nhap'), { timeout: 20000 }).catch(() => {});`;
+            }
           }
           confidence = clickRes.confidence || 'medium';
           matchedBy = clickRes.matchedBy;
@@ -212,10 +229,15 @@ export function buildActionPlan(
       });
     });
 
-    // Quyết định needsLogin: Chỉ cần khi TC đến trang quản trị (không phải trang login)
+    // Quyết định needsLogin: Chỉ cần khi TC đến trang quản trị (không phải trang login và không có bước gõ login form)
     const tcUrl = testCase.steps.find(s => s.type === 'goto')?.url || testCase.url || '';
-    const isLoginUrl = !tcUrl || /dang-nhap|login/i.test(tcUrl);
-    const needsLogin = !isLoginUrl;
+    const hasLoginFormSteps = testCase.steps.some(s => {
+      const targetNorm = (s.target || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+      return (s.type === 'fill' && /ten dang nhap|username|mat khau|password/i.test(targetNorm)) ||
+             (s.type === 'click' && /dang nhap|login|sign in/i.test(targetNorm));
+    });
+    const isLoginSuite = !tcUrl || /dang-nhap|login|sign-in|auth/i.test(tcUrl) || /dang-nhap|dang nhap|login|auth/i.test(testCase.name || '') || hasLoginFormSteps;
+    const needsLogin = !isLoginSuite;
 
     plan.testCases.push({
       id: testCase.id,

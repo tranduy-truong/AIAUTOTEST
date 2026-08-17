@@ -164,18 +164,32 @@ async function recoverVerifiedE2E(errorLog: string): Promise<{
 
   const generated = await runGenerator('e2e', targetNameFromLog(errorLog));
   return {
-    ok: generated,
+    ok: Boolean(generated),
     reason: generated ? 'VERIFIED_ACTION_PLAN_REGENERATED' : 'GENERATOR_FAILED',
   };
 }
 
 export function classifyFailure(errorLog: string): HealerDiagnosis {
-  const normalized = errorLog
+  const logStr = errorLog || '';
+  const normalized = logStr
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
     .replace(/đ/g, 'd');
-  const failedLine = failedLineFromLog(errorLog);
+  const failedLine = failedLineFromLog(logStr);
+
+  // Lỗi cấu hình đường dẫn / không tìm thấy file test nào
+  if (/no tests found|no test files|cannot find.*spec|cannot find.*test/.test(normalized)) {
+    return {
+      category: 'TEST_SCRIPT_BUG',
+      reasonCode: 'NO_TESTS_FOUND_CHECK_PATH',
+      confidence: 'high',
+      canSelfHeal: true,
+      preservesExpectedResult: true,
+      recoveryAction: 'RECRAWL_FAILED_STATE',
+      failedLine,
+    };
+  }
 
   if (
     /((current|page)\s*url.*(dang-nhap|\/login)|redirect.*(dang-nhap|login)|authentication|unauthorized|status\s*401)/.test(normalized) &&
@@ -217,10 +231,26 @@ export function classifyFailure(errorLog: string): HealerDiagnosis {
       failedLine,
     };
   }
-  if (/strict mode violation|waiting for .*locator|locator\.(click|fill): test timeout/.test(normalized)) {
+  // ── Phân loại lỗi Strict Mode Violation (resolved to 2 or more elements) ──
+  if (/strict mode violation|resolved to \d+ elements/i.test(normalized)) {
     return {
       category: 'LOCATOR_CHANGED',
-      reasonCode: 'LOCATOR_NOT_UNIQUE_OR_NOT_FOUND',
+      reasonCode: 'STRICT_MODE_VIOLATION_MULTIPLE_ELEMENTS',
+      confidence: 'high',
+      canSelfHeal: true,
+      preservesExpectedResult: true,
+      recoveryAction: 'RECRAWL_FAILED_STATE',
+      failedLine,
+    };
+  }
+
+  // ── Phân loại lỗi Locator Not Found / Role Mismatch (Tab vs Button) ──
+  if (
+    /waiting for getbyrole\(['"](button|tab|link)['"]|waiting for .*locator|locator\.(click|fill): test timeout/i.test(normalized)
+  ) {
+    return {
+      category: 'LOCATOR_CHANGED',
+      reasonCode: 'LOCATOR_NOT_FOUND_OR_ROLE_MISMATCH',
       confidence: 'high',
       canSelfHeal: true,
       preservesExpectedResult: true,

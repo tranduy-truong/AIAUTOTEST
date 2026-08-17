@@ -6,6 +6,7 @@ import { TestPolicyHarness } from "./harness/policy.js";
 
 import { loadStructuredE2EPlan, runPlanner } from "./agents/planner/run.js";
 import { runGenerator } from "./agents/generator/run.js";
+import { runAutoHealGeneratorLoop } from "./agents/generator/auto-heal-loop.js";
 import { runUnitGenerator } from "./agents/generator/unit-generator.js";
 import { runHealer } from "./agents/healer/run.js";
 import { plannerPlanToTestCases } from "./agents/planner/schema.js";
@@ -81,26 +82,30 @@ async function mainMenu() {
           value: "plan_and_generate",
         },
         {
-          name: menuChoice("02", "Chạy E2E", "Playwright • giao diện"),
+          name: menuChoice("02", "Sinh test từ kế hoạch có sẵn", "Generator • dùng test-plan hiện có"),
+          value: "generate_from_plan",
+        },
+        {
+          name: menuChoice("03", "Chạy E2E", "Playwright • giao diện"),
           value: "run_e2e",
         },
         {
-          name: menuChoice("03", "Chạy Integration", "API • database"),
+          name: menuChoice("04", "Chạy Integration", "API • database"),
           value: "run_integration",
         },
         {
-          name: menuChoice("04", "Chạy Unit Test", "Vitest • logic nội bộ"),
+          name: menuChoice("05", "Chạy Unit Test", "Vitest • logic nội bộ"),
           value: "run_unit",
         },
         {
-          name: menuChoice("05", "Xác nhận kết quả Unit", "Tiếp tục phiên đang chờ"),
+          name: menuChoice("06", "Xác nhận kết quả Unit", "Tiếp tục phiên đang chờ"),
           value: "review_unit_oracles",
         },
         {
-          name: menuChoice("06", "Xem báo cáo", "Kết quả gần nhất"),
+          name: menuChoice("07", "Xem báo cáo", "Kết quả gần nhất"),
           value: "view_report",
         },
-        { name: menuChoice("07", "Thoát", "Đóng ứng dụng"), value: "exit" },
+        { name: menuChoice("08", "Thoát", "Đóng ứng dụng"), value: "exit" },
       ],
     },
   ]);
@@ -108,6 +113,9 @@ async function mainMenu() {
   switch (action) {
     case "plan_and_generate":
       await handlePlanAndGenerate();
+      break;
+    case "generate_from_plan":
+      await handleGenerateFromExistingPlan();
       break;
     case "run_e2e":
       await runTests("e2e");
@@ -130,7 +138,92 @@ async function mainMenu() {
   }
 }
 
-// 2. TÍNH NĂNG: GỌI PLANNER LÊN KẾ HOẠCH & GENERATOR SINH CODE
+// 2. TÍNH NĂNG: SINH CODE TEST TRỰC TIẾP TỪ KẾ HOẠCH CÓ SẴN (TEST PLAN)
+async function handleGenerateFromExistingPlan() {
+  const { level } = await inquirer.prompt([
+    {
+      type: "list",
+      name: "level",
+      message: "Bạn muốn sinh code test từ kế hoạch của tầng nào?",
+      choices: [
+        { name: "E2E (Kiểm thử giao diện - artifacts/test-plan-e2e.json)", value: "e2e" },
+        { name: "Integration (Kiểm thử API - artifacts/test-plan-integration.json)", value: "integration" },
+        { name: "Unit (Kiểm thử Unit - artifacts/test-plan-unit.json)", value: "unit" },
+      ],
+    },
+  ]);
+
+  const planPath = `artifacts/test-plan-${level}.json`;
+  if (!fs.existsSync(planPath)) {
+    console.error(`\n❌ Không tìm thấy file kế hoạch: ${planPath}`);
+    console.error(`   Vui lòng chọn chức năng "01 Lên kế hoạch & sinh test" trước để tạo kế hoạch.`);
+    await returnToMenu();
+    return;
+  }
+
+  let planSummary = "";
+  let targetName = "";
+  try {
+    const rawPlan = fs.readFileSync(planPath, "utf-8");
+    const planObj = JSON.parse(rawPlan);
+    if (level === "e2e") {
+      const tcCount = planObj.testCases?.length || 0;
+      const stepCount = (planObj.testCases || []).reduce((sum, tc) => sum + (tc.steps?.length || 0), 0);
+      const firstUrl = planObj.testCases?.[0]?.url || planObj.testCases?.[0]?.steps?.find(s => s.type === "goto")?.url;
+      planSummary = `${tcCount} test cases, ${stepCount} bước${firstUrl ? ` (URL: ${firstUrl})` : ''}`;
+      if (firstUrl) {
+        try {
+          const urlObj = new URL(firstUrl);
+          let host = urlObj.hostname.replace(/^www\./, "").split(".")[0];
+          if (host === "opensource-demo") host = "orangehrm";
+          const pathParts = urlObj.pathname.split("/").filter(Boolean);
+          const lastPath = pathParts.pop() || "main";
+          targetName = `${host}_${lastPath}`.toLowerCase().replace(/[^a-z0-9_]/g, "_");
+        } catch {}
+      }
+      if (!targetName && planObj.testCases?.[0]?.id) {
+        targetName = `${level}_${planObj.testCases[0].id.toLowerCase()}`;
+      }
+    } else if (level === "unit") {
+      const targetCount = planObj.targets?.length || 0;
+      planSummary = `${targetCount} target(s)`;
+      targetName = `unit_test_suite`;
+    } else {
+      planSummary = `JSON plan hợp lệ`;
+      targetName = `integration_test_suite`;
+    }
+  } catch (err) {
+    console.error(`\n❌ File kế hoạch ${planPath} bị lỗi định dạng JSON: ${err.message}`);
+    await returnToMenu();
+    return;
+  }
+
+  if (!targetName) {
+    targetName = `${level}_test_suite`;
+  }
+
+  console.log(`\n📋 [Kế hoạch tìm thấy] ${planPath} (${planSummary})`);
+
+  const { customTarget } = await inquirer.prompt([
+    {
+      type: "input",
+      name: "customTarget",
+      message: "Tên file test đích (Enter để giữ mặc định):",
+      default: targetName,
+    },
+  ]);
+
+  const finalTarget = customTarget.trim() || targetName;
+
+  await runAutoHealGeneratorLoop(level, { targetFile: finalTarget });
+  if (level === "unit") {
+    await reviewPendingUnitOracles({ askToStart: true });
+  }
+
+  await returnToMenu();
+}
+
+// 3. TÍNH NĂNG: GỌI PLANNER LÊN KẾ HOẠCH & GENERATOR SINH CODE
 async function handlePlanAndGenerate() {
   // Chọn tầng kiểm thử
   const { level } = await inquirer.prompt([
@@ -156,7 +249,176 @@ async function handlePlanAndGenerate() {
   let contextData = "";
   let plannerCompleted = false;
   if (level === "e2e") {
-    console.log(`
+    // ─── Chọn chế độ E2E ─────────────────────────────────────────────
+    const { e2eMode } = await inquirer.prompt([{
+      type: 'list',
+      name: 'e2eMode',
+      message: 'Chọn chế độ lập kế hoạch E2E:',
+      choices: [
+        { name: '📝 Nhập kịch bản test thủ công (Script Mode)', value: 'script' },
+        { name: '🔍 Tự động khám phá & sinh kịch bản (Discovery Mode)', value: 'discovery' },
+      ],
+    }]);
+
+    if (e2eMode === 'discovery') {
+      // ═══════════════════════════════════════════════════════════════
+      // DISCOVERY MODE: Crawler tự quét đa trang → AI Planner sinh TC
+      // ═══════════════════════════════════════════════════════════════
+
+      // 1. Hỏi URL gốc cần quét
+      const { seedUrlsRaw } = await inquirer.prompt([{
+        type: 'editor',
+        name: 'seedUrlsRaw',
+        message: 'Nhập URL gốc cần quét (mỗi dòng 1 URL, lưu và đóng editor khi xong):',
+      }]);
+      const seedUrls = seedUrlsRaw
+        .split(/[\r\n]+/)
+        .map(line => line.trim())
+        .filter(line => line.startsWith('http'));
+      if (seedUrls.length === 0) {
+        console.error('❌ Không có URL hợp lệ nào. Vui lòng nhập ít nhất 1 URL bắt đầu bằng http/https.');
+        await returnToMenu();
+        return;
+      }
+      console.log(`   Sẽ quét ${seedUrls.length} URL gốc: ${seedUrls.join(', ')}`);
+
+      // 2. Hỏi Auth credentials (đơn giản, không lưu session, không hỏi label thừa)
+      const nonInteractive = process.argv.includes('--non-interactive');
+      let discoveryAuthInfo = null;
+
+      if (!nonInteractive) {
+        const { needsAuth } = await inquirer.prompt([{
+          type: 'confirm',
+          name: 'needsAuth',
+          message: 'Ứng dụng có yêu cầu đăng nhập không?',
+          default: true,
+        }]);
+
+        if (needsAuth) {
+          let suggestedLoginUrl = '';
+          try {
+            const seedOrigin = new URL(seedUrls[0]).origin;
+            const seedPath = new URL(seedUrls[0]).pathname;
+            const pathParts = seedPath.split('/').filter(Boolean);
+            if (pathParts.length >= 1) {
+              suggestedLoginUrl = seedOrigin + '/' + pathParts[0] + '/dang-nhap';
+            } else {
+              suggestedLoginUrl = seedOrigin + '/login';
+            }
+          } catch {}
+
+          const authAnswers = await inquirer.prompt([
+            { type: 'input', name: 'loginUrl', message: 'URL trang đăng nhập:', default: suggestedLoginUrl, validate: v => v.trim() ? true : 'Bắt buộc nhập URL.' },
+            { type: 'input', name: 'username', message: 'Username / Email:', default: 'admin' },
+            { type: 'password', name: 'password', message: 'Password:', default: '123123', mask: '*' },
+          ]);
+
+          discoveryAuthInfo = {
+            loginUrl: authAnswers.loginUrl,
+            username: authAnswers.username,
+            password: authAnswers.password,
+          };
+        }
+      }
+
+      const authSession = createNoAuthSession();
+
+      // 3. Chạy Discovery Crawler
+      console.log('\n🔍 [Discovery Crawler] Đang mở browser và quét trang...');
+      const { runDiscoveryCrawler, buildDiscoveryReport } = await import("./agents/crawler/discovery-crawler.js");
+      let discoveryResult;
+      try {
+        discoveryResult = await runDiscoveryCrawler(seedUrls, authSession ?? createNoAuthSession(), {
+          maxPages: 10,
+          maxDepth: 2,
+          headless: true,
+        });
+      } catch (err) {
+        console.error(`   ❌ Discovery Crawler thất bại: ${err.message}`);
+        await returnToMenu();
+        return;
+      }
+
+      if (discoveryResult.totalPages === 0 || discoveryResult.totalElements === 0) {
+        console.error('   ❌ Không phát hiện được element nào. Kiểm tra lại URL và quyền truy cập.');
+        await returnToMenu();
+        return;
+      }
+
+      console.log(`✅ Đã quét xong ${discoveryResult.totalPages} trang, thu thập ${discoveryResult.totalElements} element.`);
+
+      // 4. Lưu report
+      if (!fs.existsSync("artifacts")) fs.mkdirSync("artifacts");
+      const discoveryReport = buildDiscoveryReport(discoveryResult);
+      fs.writeFileSync("artifacts/discovery-dom.md", discoveryReport);
+      console.log('   Lưu tại: artifacts/discovery-dom.md');
+
+      // 5. Gọi Discovery Planner (AI tự sinh kịch bản từ element + auth info)
+      const { runDiscoveryPlanner } = await import("./agents/planner/run.js");
+      const plannerSuccess = await runDiscoveryPlanner(discoveryReport, discoveryAuthInfo ?? undefined);
+      if (!plannerSuccess) {
+        console.error('   ❌ Discovery Planner không sinh được kế hoạch hợp lệ.');
+        await returnToMenu();
+        return;
+      }
+      plannerCompleted = true;
+
+      // 6. Live Crawler xác minh DOM theo Action Intent (tái sử dụng luồng hiện có)
+      console.log("\n[Crawler Agent] Dang khoi chay Live Crawler de xac minh Action Intent tren DOM that...");
+      try {
+        const parsedCases = plannerPlanToTestCases(loadStructuredE2EPlan());
+        const snapshotsMap = await runLive(parsedCases, authSession ?? createNoAuthSession());
+        const totalSnapshots = [...snapshotsMap.values()]
+          .reduce((total, snapshots) => total + snapshots.length, 0);
+        const domReport = buildCompactDomReport(snapshotsMap);
+        fs.writeFileSync("artifacts/crawled-dom.md", domReport);
+        const actionPlan = buildActionPlan(parsedCases, snapshotsMap);
+        const crawlerFailuresPath = "artifacts/crawler-failures.json";
+        const crawlerFailures = fs.existsSync(crawlerFailuresPath)
+          ? JSON.parse(fs.readFileSync(crawlerFailuresPath, "utf-8"))
+          : [];
+        const unresolvedActions = actionPlan.testCases.flatMap(testCase =>
+          testCase.actions
+            .filter(action => action.confidence === "low")
+            .map(action => {
+              const crawlerFailure = crawlerFailures.find(failure =>
+                failure.testCaseId === testCase.id && failure.stepNumber === action.stepIndex,
+              ) || crawlerFailures.find(failure =>
+                failure.testCaseId === testCase.id &&
+                String(failure.reason).startsWith("AUTHENTICATION_FAILED:"),
+              );
+              return {
+                testCaseId: testCase.id,
+                stepIndex: action.stepIndex,
+                description: action.description,
+                matchedBy: action.matchedBy,
+                currentUrl: crawlerFailure?.currentUrl,
+                crawlerReason: crawlerFailure?.reason,
+              };
+            }),
+        );
+        if (unresolvedActions.length > 0) {
+          fs.writeFileSync(
+            "artifacts/unresolved-actions.json",
+            JSON.stringify(unresolvedActions, null, 2) + "\n",
+          );
+          console.warn(`   ⚠️ ${unresolvedActions.length} action chưa xác minh được. Chi tiết: artifacts/unresolved-actions.json`);
+          console.warn('   Discovery Mode: tiếp tục Generator dù có unresolved (AI sẽ cố gắng tự vá).');
+        }
+        console.log(`   Da van dap va thu thap ${totalSnapshots} DOM snapshot(s) theo tung trang thai.`);
+      } catch (err) {
+        console.warn(`   ⚠️ Live Crawler gặp lỗi: ${err.message}`);
+        console.warn('   Discovery Mode: tiếp tục Generator từ Planner Plan (không có verified locator).');
+      }
+
+      // contextData cho generator (dùng discovery report làm context)
+      contextData = discoveryReport;
+
+    } else {
+      // ═══════════════════════════════════════════════════════════════
+      // SCRIPT MODE: Luồng hiện tại (nhập kịch bản thủ công)
+      // ═══════════════════════════════════════════════════════════════
+      console.log(`
 -----------------------------------------------------------------
 NHAP KICH BAN TEST
 
@@ -173,55 +435,40 @@ Vi du:
   - Bam nut 'Dang nhap'
   - Kiem tra: URL khong con chua 'dang-nhap'
 -----------------------------------------------------------------
-    `);
+      `);
 
-    const { scriptContent } = await inquirer.prompt([
-      {
-        type: "editor",
-        name: "scriptContent",
-        message:
-          "Nhap kich ban test chi tiet (mo editor, luu va dong khi xong):",
-      },
-    ]);
+      const { scriptContent } = await inquirer.prompt([
+        {
+          type: "editor",
+          name: "scriptContent",
+          message:
+            "Nhap kich ban test chi tiet (mo editor, luu va dong khi xong):",
+        },
+      ]);
 
-    if (!fs.existsSync("artifacts")) fs.mkdirSync("artifacts");
-    fs.writeFileSync("artifacts/source-script-e2e.md", scriptContent.trim() + "\n");
+      if (!fs.existsSync("artifacts")) fs.mkdirSync("artifacts");
+      fs.writeFileSync("artifacts/source-script-e2e.md", scriptContent.trim() + "\n");
 
-    // Planner là tầng hiểu tiếng Việt duy nhất. JSON đã qua validator mới được
-    // chuyển cho Crawler; không còn parse lại bằng regex ở CLI.
-    const plannerSuccess = await runPlanner("e2e", scriptContent);
-    if (!plannerSuccess) {
-      console.error("   Da dung truoc Crawler/Generator vi Planner chua tao duoc Action Intent an toan.");
-      await returnToMenu();
-      return;
-    }
-    plannerCompleted = true;
+      // Planner là tầng hiểu tiếng Việt duy nhất. JSON đã qua validator mới được
+      // chuyển cho Crawler; không còn parse lại bằng regex ở CLI.
+      const plannerSuccess = await runPlanner("e2e", scriptContent);
+      if (!plannerSuccess) {
+        console.error("   Da dung truoc Crawler/Generator vi Planner chua tao duoc Action Intent an toan.");
+        await returnToMenu();
+        return;
+      }
+      plannerCompleted = true;
 
-    // === CRAWLER: Live Multi-State Crawler (xác minh DOM theo Action Intent) ===
-    console.log("\n[Crawler Agent] Dang khoi chay Live Crawler de xac minh Action Intent tren DOM that...");
-    try {
-      const parsedCases = plannerPlanToTestCases(loadStructuredE2EPlan());
+      // === CRAWLER: Live Multi-State Crawler (xác minh DOM theo Action Intent) ===
+      console.log("\n[Crawler Agent] Dang khoi chay Live Crawler de xac minh Action Intent tren DOM that...");
+      try {
+        const parsedCases = plannerPlanToTestCases(loadStructuredE2EPlan());
 
-      // === AUTH HELPER: Inject phiên xác thực vào Crawler ===
-      let authSession = loadAuthSession();
-      const nonInteractive = process.argv.includes('--non-interactive');
-      const authConfigPath = (() => {
-        const idx = process.argv.indexOf('--auth-config');
-        return idx !== -1 ? process.argv[idx + 1] : undefined;
-      })();
+        // === AUTH HELPER: Xác thực đơn giản cho Crawler ===
+        let authSession = createNoAuthSession();
+        const nonInteractive = process.argv.includes('--non-interactive');
 
-      if (!isAuthSessionValid(authSession)) {
-        if (authConfigPath) {
-          // CI mode: đọc từ file config
-          const ciConfig = loadAuthConfig(authConfigPath);
-          if (ciConfig && ciConfig.strategy !== 'NONE') {
-            console.log('[Auth] CI mode: Đang capture auth session từ config file...');
-            authSession = await captureAuthSession(ciConfig);
-          } else {
-            authSession = createNoAuthSession();
-          }
-        } else if (!nonInteractive) {
-          // Interactive mode: hỏi người dùng
+        if (!nonInteractive) {
           const { needsAuth } = await inquirer.prompt([{
             type: 'confirm',
             name: 'needsAuth',
@@ -230,112 +477,70 @@ Vi du:
           }]);
 
           if (needsAuth) {
-            const { authStrategy } = await inquirer.prompt([{
-              type: 'list',
-              name: 'authStrategy',
-              message: 'Chọn chiến lược xác thực:',
-              choices: [
-                { name: 'Đăng nhập qua form (Username + Password)', value: 'PLAYWRIGHT_STORAGE_STATE' },
-                { name: 'JWT Token (inject vào Authorization header)', value: 'JWT_HEADER' },
-              ],
-            }]);
-
-            if (authStrategy === 'PLAYWRIGHT_STORAGE_STATE') {
-              const authAnswers = await inquirer.prompt([
-                { type: 'input', name: 'loginUrl', message: 'URL trang đăng nhập:', validate: v => v.trim() ? true : 'Bắt buộc nhập URL.' },
-                { type: 'input', name: 'username', message: 'Username / Email:' },
-                { type: 'password', name: 'password', message: 'Password:', mask: '*' },
-                { type: 'input', name: 'usernameLabel', message: 'Label ô Username trên form (Enter để tự detect):' },
-                { type: 'input', name: 'passwordLabel', message: 'Label ô Password trên form (Enter để tự detect):' },
-                { type: 'input', name: 'expectedRedirectUrl', message: 'URL/path sau khi đăng nhập thành công (Enter để tự detect):' },
-              ]);
-              console.log('[Auth] Đang mở trình duyệt để capture phiên đăng nhập...');
-              authSession = await captureAuthSession({ strategy: 'PLAYWRIGHT_STORAGE_STATE', ...authAnswers });
-              console.log('[Auth] ✅ Đã lưu phiên đăng nhập tại:', SESSION_PATH);
-            } else {
-              const { jwtToken } = await inquirer.prompt([{
-                type: 'password',
-                name: 'jwtToken',
-                message: 'Nhập JWT Token:',
-                mask: '*',
-              }]);
-              authSession = await captureAuthSession({ strategy: 'JWT_HEADER', jwtToken });
-            }
-          } else {
-            authSession = createNoAuthSession();
-          }
-        } else {
-          // non-interactive, không có auth config => bỏ qua auth
-          authSession = createNoAuthSession();
-        }
-      } else {
-        if (!nonInteractive) {
-          const { reuseSession } = await inquirer.prompt([{
-            type: 'confirm',
-            name: 'reuseSession',
-            message: `Tìm thấy phiên đăng nhập cũ (${authSession.loginUrl ?? 'không rõ URL'}). Dùng lại không?`,
-            default: true,
-          }]);
-          if (!reuseSession) {
-            clearAuthSession();
-            authSession = createNoAuthSession();
+            const authAnswers = await inquirer.prompt([
+              { type: 'input', name: 'loginUrl', message: 'URL trang đăng nhập:', default: 'https://hcm.mobifone.vn/qly-dttg/dang-nhap', validate: v => v.trim() ? true : 'Bắt buộc nhập URL.' },
+              { type: 'input', name: 'username', message: 'Username / Email:', default: 'admin' },
+              { type: 'password', name: 'password', message: 'Password:', default: '123123', mask: '*' },
+            ]);
+            console.log('[Auth] Đang mở trình duyệt để xác thực...');
+            authSession = await captureAuthSession({ strategy: 'PLAYWRIGHT_STORAGE_STATE', ...authAnswers });
           }
         }
+
+        const snapshotsMap = await runLive(parsedCases, authSession ?? createNoAuthSession());
+
+        const totalSnapshots = [...snapshotsMap.values()]
+          .reduce((total, snapshots) => total + snapshots.length, 0);
+        const domReport = buildCompactDomReport(snapshotsMap);
+
+        fs.writeFileSync("artifacts/crawled-dom.md", domReport);
+        const actionPlan = buildActionPlan(parsedCases, snapshotsMap);
+        const crawlerFailuresPath = "artifacts/crawler-failures.json";
+        const crawlerFailures = fs.existsSync(crawlerFailuresPath)
+          ? JSON.parse(fs.readFileSync(crawlerFailuresPath, "utf-8"))
+          : [];
+        const unresolvedActions = actionPlan.testCases.flatMap(testCase =>
+          testCase.actions
+            .filter(action => action.confidence === "low")
+            .map(action => {
+              const crawlerFailure = crawlerFailures.find(failure =>
+                failure.testCaseId === testCase.id && failure.stepNumber === action.stepIndex,
+              ) || crawlerFailures.find(failure =>
+                failure.testCaseId === testCase.id &&
+                String(failure.reason).startsWith("AUTHENTICATION_FAILED:"),
+              );
+              return {
+                testCaseId: testCase.id,
+                stepIndex: action.stepIndex,
+                description: action.description,
+                matchedBy: action.matchedBy,
+                currentUrl: crawlerFailure?.currentUrl,
+                crawlerReason: crawlerFailure?.reason,
+              };
+            }),
+        );
+        if (unresolvedActions.length > 0) {
+          fs.writeFileSync(
+            "artifacts/unresolved-actions.json",
+            JSON.stringify(unresolvedActions, null, 2) + "\n",
+          );
+          throw new Error(
+            `Crawler chua xac minh duoc ${unresolvedActions.length} action. ` +
+            `Lan chay nay da ket thuc, khong tu dong cho hay thu lai. ` +
+            `Chi tiet: artifacts/unresolved-actions.json va artifacts/crawler-failures.json. ` +
+            `Generator duoc chan de khong doan locator.`,
+          );
+        }
+        console.log(`   Da van dap va thu thap ${totalSnapshots} DOM snapshot(s) theo tung trang thai.`);
+      } catch (err) {
+        console.error(`   Loi hop dong E2E: ${err.message}`);
+        console.error("   Planner Plan van duoc giu lai; Generator dung de tranh sinh locator doan mo.");
+        await returnToMenu();
+        return;
       }
 
-      const snapshotsMap = await runLive(parsedCases, authSession ?? createNoAuthSession());
-
-      const totalSnapshots = [...snapshotsMap.values()]
-        .reduce((total, snapshots) => total + snapshots.length, 0);
-      const domReport = buildCompactDomReport(snapshotsMap);
-
-      fs.writeFileSync("artifacts/crawled-dom.md", domReport);
-      const actionPlan = buildActionPlan(parsedCases, snapshotsMap);
-      const crawlerFailuresPath = "artifacts/crawler-failures.json";
-      const crawlerFailures = fs.existsSync(crawlerFailuresPath)
-        ? JSON.parse(fs.readFileSync(crawlerFailuresPath, "utf-8"))
-        : [];
-      const unresolvedActions = actionPlan.testCases.flatMap(testCase =>
-        testCase.actions
-          .filter(action => action.confidence === "low")
-          .map(action => {
-            const crawlerFailure = crawlerFailures.find(failure =>
-              failure.testCaseId === testCase.id && failure.stepNumber === action.stepIndex,
-            ) || crawlerFailures.find(failure =>
-              failure.testCaseId === testCase.id &&
-              String(failure.reason).startsWith("AUTHENTICATION_FAILED:"),
-            );
-            return {
-              testCaseId: testCase.id,
-              stepIndex: action.stepIndex,
-              description: action.description,
-              matchedBy: action.matchedBy,
-              currentUrl: crawlerFailure?.currentUrl,
-              crawlerReason: crawlerFailure?.reason,
-            };
-          }),
-      );
-      if (unresolvedActions.length > 0) {
-        fs.writeFileSync(
-          "artifacts/unresolved-actions.json",
-          JSON.stringify(unresolvedActions, null, 2) + "\n",
-        );
-        throw new Error(
-          `Crawler chua xac minh duoc ${unresolvedActions.length} action. ` +
-          `Lan chay nay da ket thuc, khong tu dong cho hay thu lai. ` +
-          `Chi tiet: artifacts/unresolved-actions.json va artifacts/crawler-failures.json. ` +
-          `Generator duoc chan de khong doan locator.`,
-        );
-      }
-      console.log(`   Da van dap va thu thap ${totalSnapshots} DOM snapshot(s) theo tung trang thai.`);
-    } catch (err) {
-      console.error(`   Loi hop dong E2E: ${err.message}`);
-      console.error("   Planner Plan van duoc giu lai; Generator dung de tranh sinh locator doan mo.");
-      await returnToMenu();
-      return;
+      contextData = scriptContent;
     }
-
-    contextData = scriptContent;
 
   } else if (level === "integration") {
     const { apiDesc } = await inquirer.prompt([
@@ -516,7 +721,7 @@ Vi du:
         targetName = `${level}_test_suite`;
       }
 
-      await runGenerator(level, targetName);
+      await runAutoHealGeneratorLoop(level, { targetFile: targetName });
       if (level === "unit") {
         await reviewPendingUnitOracles({ askToStart: true });
       }

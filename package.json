@@ -38,6 +38,7 @@
     "vitest": "^4.1.10"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@testcontainers/mysql": "^10.18.0",
     "@testcontainers/postgresql": "^10.18.0",
     "better-sqlite3": "^11.8.1",

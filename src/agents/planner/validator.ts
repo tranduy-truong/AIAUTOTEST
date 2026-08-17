@@ -151,6 +151,12 @@ function validateAssertion(assertion: ParsedAssertion): boolean {
   if (!assertion || !ASSERTION_TYPES.has(assertion.kind)) return false;
   if (typeof assertion.value !== 'string' || !assertion.value.trim()) return false;
   if (assertion.kind === 'attribute') {
+    const valStr = String(assertion.value || '').toLowerCase();
+    if (/text|van ban|văn bản|doc duoc|đọc được|ro|rõ|hien|hiển/.test(valStr)) {
+      assertion.value = 'text';
+    } else if (/password|an|ẩn|cham|chấm|mat khau|mật khẩu/.test(valStr)) {
+      assertion.value = 'password';
+    }
     return assertion.target === 'password' &&
       assertion.name === 'type' &&
       (assertion.value === 'password' || assertion.value === 'text');

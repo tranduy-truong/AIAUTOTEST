@@ -65,12 +65,39 @@ export function guidedPickScript(
       banner.id = '__ai-test-guided-banner__';
       banner.textContent = ${JSON.stringify(bannerText)};
       banner.style.cssText = [
-        'position:fixed', 'top:12px', 'left:50%', 'transform:translateX(-50%)',
+        'position:fixed', 'bottom:12px', 'left:12px',
         'z-index:2147483647', 'background:#7f1d1d', 'color:white',
-        'padding:14px 18px', 'border-radius:8px', 'font:600 14px/1.5 sans-serif',
-        'box-shadow:0 4px 20px rgba(0,0,0,.35)', 'width:min(760px,calc(100vw - 32px))',
-        'white-space:pre-line', 'text-align:left',
+        'padding:10px 14px', 'border-radius:8px', 'font:600 13px/1.4 sans-serif',
+        'box-shadow:0 4px 20px rgba(0,0,0,.35)', 'max-width:min(480px,calc(100vw - 32px))',
+        'white-space:pre-line', 'text-align:left', 'cursor:move',
+        'user-select:none', 'opacity:0.92', 'transition:opacity 0.2s',
       ].join(';');
+      // Cho phép kéo banner tránh đè phần tử
+      let _dragX = 0, _dragY = 0, _startX = 0, _startY = 0, _dragging = false;
+      banner.addEventListener('mousedown', function(e) {
+        if (e.target !== banner) return;
+        _dragging = true; _startX = e.clientX - banner.offsetLeft; _startY = e.clientY - banner.offsetTop;
+        e.preventDefault();
+      });
+      document.addEventListener('mousemove', function(e) {
+        if (!_dragging) return;
+        banner.style.left = (e.clientX - _startX) + 'px';
+        banner.style.top = (e.clientY - _startY) + 'px';
+        banner.style.bottom = 'auto';
+      });
+      document.addEventListener('mouseup', function() { _dragging = false; });
+      // Double-click để thu gọn/mở rộng
+      banner.addEventListener('dblclick', function() {
+        if (banner.dataset.minimized === '1') {
+          banner.textContent = ${JSON.stringify(bannerText)};
+          banner.dataset.minimized = '0';
+          banner.style.maxWidth = 'min(480px,calc(100vw - 32px))';
+        } else {
+          banner.textContent = '🔍 Crawler (double-click để mở | ESC hủy)';
+          banner.dataset.minimized = '1';
+          banner.style.maxWidth = '320px';
+        }
+      });
       document.documentElement.appendChild(banner);
 
       function escapeCss(value) {
@@ -719,6 +746,24 @@ export function isLoginUrl(value: string): boolean {
   }
 }
 
+export function isExplicitLoginSuite(testCase: ParsedTestCase): boolean {
+  const moduleName = (testCase as any).module || '';
+  const nameAndModule = `${testCase.id} ${testCase.name} ${moduleName}`.toLowerCase();
+  if (/(?:dang-nhap|dang nhap|login|signin|sign-in|auth)/i.test(nameAndModule)) {
+    return true;
+  }
+  for (const step of testCase.steps) {
+    if (step.type === 'goto' && step.url && isLoginUrl(step.url)) {
+      return true;
+    }
+    const targetNorm = normalizeActionText(step.target || '');
+    if (['ten dang nhap', 'username', 'mat khau', 'password', 'login'].includes(targetNorm)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function protectedGotoAfterLogin(
   steps: ParsedStep[],
   currentIndex: number,
@@ -848,15 +893,20 @@ export async function runLive(
     browser = await chromium.launch({ headless });
 
     for (const [testCaseIndex, testCase] of testCases.entries()) {
+      const isLoginSuite = isExplicitLoginSuite(testCase);
+      const caseContextOptions = isLoginSuite ? {} : contextOptions;
+
       console.log(
         `[Live Runner] Dang thu thap DOM cho ${testCase.id} - ${testCase.name} ` +
-        `(${testCaseIndex + 1}/${testCases.length})...`,
+        `(${testCaseIndex + 1}/${testCases.length}) ` +
+        `[Mode: ${isLoginSuite ? 'Clean Incognito (Login Suite)' : 'Authenticated Session'}]...`,
       );
       const snapshots: DomSnapshot[] = [];
       let abortRemainingSteps = false;
       // Mỗi test case có context riêng để cookie/session không rò rỉ sang test khác.
-      // Auth session được inject qua contextOptions (storageState hoặc extraHTTPHeaders).
-      const context = await browser.newContext(contextOptions);
+      // Với Login Suite: Dùng context sạch hoàn toàn.
+      // Với Protected Suite: Dùng storageState hoặc extraHTTPHeaders đã lưu.
+      const context = await browser.newContext(caseContextOptions);
       const page = await context.newPage();
 
       try {
@@ -879,6 +929,17 @@ export async function runLive(
               if (!step.url) throw new Error('Buoc goto khong co URL');
               await page.goto(step.url, { timeout: 15000, waitUntil: 'domcontentloaded' });
               await waitForStateSettled(page);
+
+              // Xử lý khi mở trang Login mà bị auto-redirect về Dashboard do session cũ:
+              if (isLoginUrl(step.url) && !isLoginUrl(page.url())) {
+                console.log('[Live Runner] Phát hiện bị auto-redirect xa khỏi trang Đăng nhập! Đang xóa Cookie/LocalStorage để tải lại Form Đăng nhập ...');
+                await context.clearCookies();
+                await page.evaluate(() => {
+                  try { localStorage.clear(); sessionStorage.clear(); } catch {}
+                }).catch(() => {});
+                await page.goto(step.url, { timeout: 15000, waitUntil: 'domcontentloaded' });
+                await waitForStateSettled(page);
+              }
 
               const declaredAuthProbe = index > 0
                 ? loginStepBeforeProtectedGoto(testCase.steps, index)

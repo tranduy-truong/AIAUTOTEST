@@ -136,3 +136,38 @@ export function isAuthSessionValid(session: AuthSession | null): boolean {
 export function createNoAuthSession(): AuthSession {
   return { strategy: 'NONE', capturedAt: new Date().toISOString() };
 }
+
+// ─── Credential Cache — Tự động làm mới session khi hết hạn ─────────────────
+// ⚠️  Thông tin đăng nhập được lưu plaintext — CHỈ dùng cho môi trường local.
+// Không commit file này lên version control.
+
+export const AUTH_CREDENTIALS_CACHE_PATH = path.join(AUTH_DIR, '.credentials.json');
+
+/** Lưu thông tin đăng nhập để Crawler tự động đăng nhập lại khi session hết hạn. */
+export function saveAuthCredentialsCache(config: Omit<AuthConfig, 'jwtToken'>): void {
+  fs.mkdirSync(AUTH_DIR, { recursive: true });
+  fs.writeFileSync(
+    AUTH_CREDENTIALS_CACHE_PATH,
+    JSON.stringify(config, null, 2) + '\n',
+    'utf-8',
+  );
+}
+
+/** Đọc thông tin đăng nhập đã cache. Trả về null nếu không có hoặc thiếu trường bắt buộc. */
+export function loadAuthCredentialsCache(): AuthConfig | null {
+  if (!fs.existsSync(AUTH_CREDENTIALS_CACHE_PATH)) return null;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(AUTH_CREDENTIALS_CACHE_PATH, 'utf-8')) as AuthConfig;
+    if (!parsed.strategy || !parsed.loginUrl || !parsed.username || !parsed.password) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+/** Xóa cache credential (ví dụ khi user chọn không lưu hoặc đổi tài khoản). */
+export function clearAuthCredentialsCache(): void {
+  if (fs.existsSync(AUTH_CREDENTIALS_CACHE_PATH)) {
+    fs.rmSync(AUTH_CREDENTIALS_CACHE_PATH, { force: true });
+  }
+}

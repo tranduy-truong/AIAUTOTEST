@@ -1,4 +1,10 @@
+import fs from "fs";
 import { defineConfig, devices } from "@playwright/test";
+
+// Tu dong inject storageState neu .auth/storage-state.json da ton tai
+const storageStatePath = fs.existsSync(".auth/storage-state.json")
+  ? ".auth/storage-state.json"
+  : undefined;
 
 export default defineConfig({
   testDir: "./tests/e2e",
@@ -11,7 +17,7 @@ export default defineConfig({
   use: {
     trace: "on-first-retry",
     headless: !!process.env.CI,
-    // Không dùng storageState (mỗi testcase độc lập với tài khoản/mật khẩu riêng)
+    storageState: storageStatePath,
   },
   projects: [
     {
@@ -20,3 +26,4 @@ export default defineConfig({
     },
   ],
 });
+

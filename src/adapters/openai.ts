@@ -15,6 +15,7 @@ export class OpenAIAdapter {
     const explicitProvider = process.env.AI_PROVIDER?.trim().toLowerCase() as AIProvider | undefined;
     const geminiKey = (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || "").trim().replace(/^['"]+|['"]+$/g, "");
     const groqKey = (process.env.GROQ_API_KEY || "").trim().replace(/^['"]+|['"]+$/g, "");
+    const cerebrasKey = (process.env.CEREBRAS_API_KEY || "").trim().replace(/^['"]+|['"]+$/g, "");
     const openAIKey = (process.env.OPENAI_API_KEY || "").trim().replace(/^['"]+|['"]+$/g, "");
 
     let envModel = (process.env.AI_MODEL || "").trim().replace(/^['"]+|['"]+$/g, "");
@@ -24,6 +25,8 @@ export class OpenAIAdapter {
 
     if (explicitProvider) {
       this.provider = explicitProvider;
+    } else if (cerebrasKey || (process.env.AI_API_KEY && process.env.AI_API_KEY.startsWith("csk-"))) {
+      this.provider = "custom";
     } else if (groqKey && (envModel.includes("llama") || envModel.includes("qwen") || envModel.includes("mixtral") || !geminiKey)) {
       this.provider = "groq";
     } else if (geminiKey) {
@@ -45,7 +48,6 @@ export class OpenAIAdapter {
         apiKey = geminiKey;
         baseURL = (process.env.GEMINI_BASE_URL || "https://generativelanguage.googleapis.com/v1beta/openai/").trim();
         
-        // Đảm bảo model luôn là model hợp lệ của Gemini (không bị gán nhầm model Llama)
         if (
           !envModel ||
           envModel.includes("llama") ||
@@ -53,10 +55,9 @@ export class OpenAIAdapter {
           envModel === "gemini-2.0-flash" ||
           envModel === "gemini-1.5-flash" ||
           envModel === "gemini-flash" ||
-          envModel === "gemini" ||
-          envModel === "gemini-flash-latest"
+          envModel === "gemini"
         ) {
-          this.model = "gemini-3.7-flash";
+          this.model = "gemini-flash-latest";
         } else if (envModel === "gemini-pro" || envModel === "gemini-1.5-pro" || envModel === "gemini-pro-latest") {
           this.model = "gemini-3-flash-preview";
         } else {
@@ -80,15 +81,18 @@ export class OpenAIAdapter {
       case "groq":
       default: {
         this.provider = "groq";
-        apiKey = groqKey;
-        baseURL = (process.env.GROQ_BASE_URL || "https://api.groq.com/openai/v1").trim();
-        this.model = (envModel && !envModel.includes("gemini") && !envModel.includes("gpt")) ? envModel : "llama-3.3-70b-versatile";
+        apiKey = groqKey || cerebrasKey;
+        baseURL = cerebrasKey
+          ? "https://api.cerebras.ai/v1"
+          : (process.env.GROQ_BASE_URL || "https://api.groq.com/openai/v1").trim();
+        this.model = (envModel && !envModel.includes("gemini") && !envModel.includes("gpt")) ? envModel : (cerebrasKey ? "gpt-oss-120b" : "llama-3.3-70b-versatile");
         if (!apiKey) {
-          console.warn("⚠️ CẢNH BÁO: Chưa tìm thấy GROQ_API_KEY trong file .env!");
+          console.warn("⚠️ CẢNH BÁO: Chưa tìm thấy API Key trong file .env!");
         }
         break;
       }
     }
+
 
     this.client = new OpenAI({
       apiKey,

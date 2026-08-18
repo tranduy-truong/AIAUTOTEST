@@ -10,6 +10,8 @@ import { buildActionPlan } from '../../core/action-plan.js';
 import { createNoAuthSession, loadAuthSession } from '../../core/auth/auth-session.js';
 import { artifact, detail, section, success, warning, error as uiError } from '../../core/cli-ui.js';
 
+import { runHealer } from '../healer/run.js';
+
 export interface AutoHealLoopResult {
   success: boolean;
   attempts: number;
@@ -21,29 +23,35 @@ export async function runAutoHealGeneratorLoop(
   level: 'e2e' | 'integration' | 'unit',
   options: { maxAttempts?: number; targetFile?: string } = {},
 ): Promise<AutoHealLoopResult> {
-  const maxAttempts = options.maxAttempts ?? 1;
+  const maxAttempts = options.maxAttempts ?? 3;
   let attempt = 1;
   let activeSpecFilePath: string | undefined;
 
-  section('02', 'Generator & Test Execution', `Tự động sinh code & chạy kiểm thử thực tế (${maxAttempts} lần)`);
+  section('02', 'Generator & Auto-Heal Loop', `Tự động sinh code, chạy kiểm thử & chữa lành tự động (Tối đa ${maxAttempts} vòng)`);
 
   while (attempt <= maxAttempts) {
-    // Bước 1: Sinh / Cập nhật code Playwright
-    console.log(`\n   [1/2] Đang sinh code kiểm thử (${level})...`);
-    const genResult = await runGenerator(level, options.targetFile, {
-      exactFilePath: activeSpecFilePath,
-    });
+    console.log(`\n========================================================================`);
+    console.log(`   🚀 VÒNG KIỂM THỬ & CHỮA LÀNH ${attempt}/${maxAttempts} (${level.toUpperCase()})`);
+    console.log(`========================================================================`);
 
-    if (!genResult) {
-      uiError(`   ❌ Generator không thể sinh code.`);
-      return { success: false, attempts: attempt, reason: 'GENERATOR_FAILED' };
+    // Bước 1: Sinh code (ở lần 1) nếu chưa có activeSpecFilePath
+    if (!activeSpecFilePath) {
+      console.log(`\n   [1/2] Đang sinh code kiểm thử (${level})...`);
+      const genResult = await runGenerator(level, options.targetFile, {
+        exactFilePath: activeSpecFilePath,
+      });
+
+      if (!genResult) {
+        uiError(`   ❌ Generator không thể sinh code.`);
+        return { success: false, attempts: attempt, reason: 'GENERATOR_FAILED' };
+      }
+
+      if (typeof genResult === 'string') {
+        activeSpecFilePath = genResult;
+      }
     }
 
-    if (typeof genResult === 'string') {
-      activeSpecFilePath = genResult;
-    }
-
-    // Bước 2: Tự động khởi chạy kiểm thử thực tế đối với file spec vừa sinh (dùng đường dẫn tương đối)
+    // Bước 2: Tự động khởi chạy kiểm thử thực tế đối với file spec vừa sinh
     console.log(`   [2/2] Đang chạy kiểm thử tự động với Playwright...`);
     let testOutput = '';
     let testPassed = false;
@@ -68,13 +76,14 @@ export async function runAutoHealGeneratorLoop(
 
     // Bước 3: Nếu test PASS 100% -> Kết thúc thành công & tạo report thành công!
     if (testPassed) {
-      success(`   🎉 Tất cả test cases đã PASSED hoàn toàn!`);
+      success(`   🎉 Tất cả test cases đã PASSED hoàn toàn ở vòng ${attempt}/${maxAttempts}!`);
 
       const passReport = `
 # BÁO CÁO KẾT QUẢ KIỂM THỬ - ${new Date().toLocaleString('vi-VN')}
 
 - **Tầng kiểm thử**: ${level.toUpperCase()}
 - **Trạng thái**: ✅ PASSED (100% Thành công)
+- **Số vòng chữa lành**: ${attempt}/${maxAttempts}
 - **File Test Spec**: \`${activeSpecFilePath ?? 'N/A'}\`
 
 ---
@@ -92,21 +101,25 @@ ${testOutput.trim()}
       return { success: true, attempts: attempt, reportPath: 'artifacts/report.md' };
     }
 
-    // Bước 4: Test chưa PASS -> Phân loại lỗi, ghi report chi tiết và tiếp tục không gián đoạn
-    console.log(`   ⚠️ Phát hiện lỗi trong quá trình chạy test. Đang phân tích và xuất báo cáo...`);
+    // Bước 4: Test chưa PASS -> Kích hoạt Healer Agent để tự động phân tích và chữa lành
+    console.log(`   ⚠️ Phát hiện lỗi trong quá trình chạy test (Vòng ${attempt}/${maxAttempts}).`);
+    const healed = await runHealer(level, testOutput, activeSpecFilePath);
+
     const diagnosis: HealerDiagnosis = classifyFailure(testOutput);
 
-    detail('Loại lỗi', diagnosis.category);
-    detail('Mã chẩn đoán', diagnosis.reasonCode);
-    if (diagnosis.failedLine) {
-      detail('Dòng lỗi', diagnosis.failedLine);
+    if (healed && attempt < maxAttempts) {
+      success(`   ✨ Healer đã tự động sửa đổi file spec! Chuẩn bị chạy lại vòng ${attempt + 1}...`);
+      attempt++;
+      continue;
     }
 
+    // Nếu không thể chữa lành hoặc đã hết số lượt thử
     const reportContent = `
 # BÁO CÁO PHÂN TÍCH LỖI KIỂM THỬ - ${new Date().toLocaleString('vi-VN')}
 
 - **Tầng kiểm thử**: ${level.toUpperCase()}
 - **Trạng thái**: ⚠️ FAILED / CẦN XEM XÉT
+- **Số vòng thử nghiệm**: ${attempt}/${maxAttempts}
 - **File Test Spec**: \`${activeSpecFilePath ?? 'N/A'}\`
 - **Loại lỗi**: ${diagnosis.category}
 - **Mã chẩn đoán**: \`${diagnosis.reasonCode}\`

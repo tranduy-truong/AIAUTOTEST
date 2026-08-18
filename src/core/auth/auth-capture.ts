@@ -39,31 +39,51 @@ export class AuthCaptureError extends Error {
 // ─── Heuristics để tìm input và nút submit ────────────────────────────────────
 
 const USERNAME_SELECTORS = [
+  '[data-test="username"]',
+  '[data-testid="username"]',
+  '#user-name',
+  '#username',
   'input[type="email"]',
-  'input[type="text"][name*="user"]',
-  'input[type="text"][name*="email"]',
-  'input[type="text"][name*="login"]',
-  'input[type="text"][id*="user"]',
-  'input[type="text"][id*="email"]',
+  'input[placeholder*="username" i]',
+  'input[placeholder*="user name" i]',
+  'input[placeholder*="tên đăng nhập" i]',
+  'input[placeholder*="tài khoản" i]',
+  'input[type="text"][name*="user" i]',
+  'input[type="text"][name*="email" i]',
+  'input[type="text"][name*="login" i]',
+  'input[type="text"][id*="user" i]',
+  'input[type="text"][id*="email" i]',
   'input[name="username"]',
   'input[name="email"]',
   'input[autocomplete="username"]',
   'input[autocomplete="email"]',
+  'input[type="text"]',
 ];
 
 const PASSWORD_SELECTORS = [
+  '[data-test="password"]',
+  '[data-testid="password"]',
+  '#password',
   'input[type="password"]',
+  'input[placeholder*="password" i]',
+  'input[placeholder*="mật khẩu" i]',
   'input[name="password"]',
   'input[autocomplete="current-password"]',
 ];
 
 const SUBMIT_SELECTORS = [
-  'button[type="submit"]',
+  '[data-test="login-button"]',
+  '[data-testid="login-button"]',
+  '#login-button',
   'input[type="submit"]',
+  'button[type="submit"]',
+  'input[value*="Login" i]',
+  'input[value*="Đăng nhập" i]',
   'button:has-text("Đăng nhập")',
   'button:has-text("Login")',
   'button:has-text("Sign in")',
   'button:has-text("Log in")',
+  'button:has-text("Submit")',
 ];
 
 async function findInputByLabelOrSelector(

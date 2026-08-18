@@ -11,14 +11,14 @@ Kỹ năng này cung cấp các nguyên tắc cốt lõi giúp AI Generator sinh
 
 ## 1. Quy Tắc Xử Lý Locator Bền Vững (Universal Fallback Chaining with `.or()`)
 
-### 1.1. Chuỗi Fallback Bắt Buộc Khi Click (`page.getByRole` / `page.getByText`)
-Để phòng trường hợp không get đúng element hoặc dev thay đổi role giữa thẻ `button`, `tab`, `link`, `div`, `span`:
-* **✅ BẮT BUỘC**: Luôn xâu chuỗi các điều kiện `.or(...)` và kết thúc bằng `.first()`:
+### 1.1. Chuỗi Fallback Bắt Buộc Khi Click (Interactive Roles: `tab`, `button`, `link`)
+* **⚠️ LƯU Ý CỐT LÕI**: **TUYỆT ĐỐI KHÔNG DÙNG `page.getByText()` ĐỂ CLICK**. `getByText` có thể bấm nhầm vào modal dialog title, thẻ tiêu đề `<h1>`, hoặc dòng text tĩnh không kích hoạt sự kiện thay đổi trạng thái (state).
+* **✅ BẮT BUỘC**: Chỉ sử dụng các **Interactive Role** (`tab`, `button`, `link`) kết hợp chuỗi `.or(...)` và kết thúc bằng `.first()`:
   ```typescript
   // Click nút Thêm / Chuyển Tab / Thao tác:
   await page.getByRole('tab', { name: /Quá trình thay đổi/i })
     .or(page.getByRole('button', { name: /Quá trình thay đổi/i }))
-    .or(page.getByText('Quá trình thay đổi'))
+    .or(page.getByRole('link', { name: /Quá trình thay đổi/i }))
     .first()
     .click();
   ```

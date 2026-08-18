@@ -3,7 +3,7 @@ import path from "path";
 import OpenAI from "openai";
 import "dotenv/config";
 
-export type AIProvider = "gemini" | "groq" | "openai" | "custom";
+export type AIProvider = "gemini" | "groq" | "openai" | "openrouter" | "custom";
 
 export class OpenAIAdapter {
   model: string;
@@ -13,6 +13,7 @@ export class OpenAIAdapter {
   constructor(modelName?: string) {
     // 1. Xác định Provider từ biến môi trường hoặc tự động nhận diện từ API key
     const explicitProvider = process.env.AI_PROVIDER?.trim().toLowerCase() as AIProvider | undefined;
+    const openrouterKey = (process.env.OPENROUTER_API_KEY || process.env.OPENROUTER_KEY || "").trim().replace(/^['"]+|['"]+$/g, "");
     const geminiKey = (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || "").trim().replace(/^['"]+|['"]+$/g, "");
     const groqKey = (process.env.GROQ_API_KEY || "").trim().replace(/^['"]+|['"]+$/g, "");
     const openAIKey = (process.env.OPENAI_API_KEY || "").trim().replace(/^['"]+|['"]+$/g, "");
@@ -24,6 +25,8 @@ export class OpenAIAdapter {
 
     if (explicitProvider) {
       this.provider = explicitProvider;
+    } else if (openrouterKey || (envModel && envModel.includes("/"))) {
+      this.provider = "openrouter";
     } else if (groqKey && (envModel.includes("llama") || envModel.includes("qwen") || envModel.includes("mixtral") || !geminiKey)) {
       this.provider = "groq";
     } else if (geminiKey) {
@@ -41,6 +44,15 @@ export class OpenAIAdapter {
 
     // 2. Cấu hình baseURL, API key và tự động đồng bộ model tương thích với từng provider
     switch (this.provider) {
+      case "openrouter": {
+        apiKey = openrouterKey;
+        baseURL = (process.env.OPENROUTER_BASE_URL || "https://openrouter.ai/api/v1").trim();
+        this.model = envModel || "google/gemini-2.0-flash-exp:free";
+        if (!apiKey) {
+          console.warn("⚠️ CẢNH BÁO: Chưa tìm thấy OPENROUTER_API_KEY trong file .env!");
+        }
+        break;
+      }
       case "gemini": {
         apiKey = geminiKey;
         baseURL = (process.env.GEMINI_BASE_URL || "https://generativelanguage.googleapis.com/v1beta/openai/").trim();
@@ -56,9 +68,9 @@ export class OpenAIAdapter {
           envModel === "gemini" ||
           envModel === "gemini-flash-latest"
         ) {
-          this.model = "gemini-3.7-flash";
+          this.model = "gemini-2.0-flash";
         } else if (envModel === "gemini-pro" || envModel === "gemini-1.5-pro" || envModel === "gemini-pro-latest") {
-          this.model = "gemini-3-flash-preview";
+          this.model = "gemini-1.5-pro";
         } else {
           this.model = envModel;
         }
@@ -94,6 +106,10 @@ export class OpenAIAdapter {
       apiKey,
       baseURL,
       dangerouslyAllowBrowser: true,
+      defaultHeaders: this.provider === "openrouter" ? {
+        "HTTP-Referer": "https://github.com/tranduy-truong/AIAUTOTEST",
+        "X-Title": "AIAUTOTEST",
+      } : undefined,
     });
   }
 
@@ -114,10 +130,8 @@ export class OpenAIAdapter {
     );
     let promptText = taskContent;
 
-    // Chỉ cắt bớt prompt khi dùng Groq (do giới hạn 12,000 TPM thấp)
-    // Gemini có context window 1,000,000 tokens nên không cần cắt
-    // Đối với Gemini (context lớn), cho phép max_tokens lên tới 8192 để không bị cắt cụt JSON
-    const effectiveMaxTokens = this.provider === "gemini"
+    // Cho phép max_tokens lên tới 8192 cho Gemini và OpenRouter để không bị cắt cụt JSON
+    const effectiveMaxTokens = (this.provider === "gemini" || this.provider === "openrouter")
       ? (maxTokens ? Math.max(maxTokens, 8192) : 8192)
       : maxTokens;
 

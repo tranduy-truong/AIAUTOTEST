@@ -195,7 +195,7 @@ export function guidedPickScript(
         ) || clicked;
         const selector = selectorFor(element);
         const scope = element.closest('dialog, [role="dialog"], [aria-modal="true"], form, [data-slot="sheet-content"], [class*="drawer"], [class*="modal"]');
-        const row = element.closest('tr, [role="row"], [data-row-key], [data-testid*="row"], [class*="table-row"]');
+        const row = element.closest('tr, [role="row"], [data-row-key], [data-testid*="row"], [class*="table-row"], [class*="inventory_item"], [class*="card"], [class*="product"], [class*="item"], article, li, [data-test*="item"]');
         cleanup();
         globalThis[resultKey] = {
           cancelled: false,
@@ -234,8 +234,8 @@ export const CAPTURE_SNAPSHOT_SCRIPT = String.raw`
   (() => {
     const query = [
       'input', 'textarea', 'select', 'option', 'button', 'a[href]', 'label', 'svg', 'i',
-      '[role]', '[aria-label]', '[aria-haspopup]', '[data-testid]', '[data-slot]', '[data-value]', '[title]',
-      '[onclick]', '[tabindex]',
+      '[role]', '[aria-label]', '[aria-haspopup]', '[data-test]', '[data-testid]', '[data-cy]', '[data-qa]',
+      '[data-slot]', '[data-value]', '[title]', '[onclick]', '[tabindex]',
     ].join(', ');
     const nodes = Array.from(document.querySelectorAll(query));
 
@@ -249,12 +249,13 @@ export const CAPTURE_SNAPSHOT_SCRIPT = String.raw`
     }
 
     function uniqueSelector(source) {
-      const isDirectTarget = source.matches('input, textarea, select, option, button, a[href], label, [role], [contenteditable], [data-testid], [data-slot], [data-value], [aria-label], [tabindex]');
+      const isDirectTarget = source.matches('input, textarea, select, option, button, a[href], label, [role], [contenteditable], [data-test], [data-testid], [data-cy], [data-qa], [data-slot], [data-value], [aria-label], [tabindex]');
       const interactive = isDirectTarget
         ? source
         : source.closest('button, a, select, [role="button"], [role="link"], [role="combobox"], [role="option"], [role="menuitem"], [onclick], [tabindex]') || source;
-      const testId = interactive.getAttribute('data-testid');
-      if (testId) return '[data-testid="' + escapeCss(testId) + '"]';
+      
+      const testId = interactive.getAttribute('data-test') || interactive.getAttribute('data-testid') || interactive.getAttribute('data-cy') || interactive.getAttribute('data-qa');
+      if (testId) return '[data-test="' + escapeCss(testId) + '"], [data-testid="' + escapeCss(testId) + '"]';
       if (interactive.id) return '#' + escapeCss(interactive.id);
 
       const dataSlot = interactive.getAttribute('data-slot');
@@ -317,11 +318,13 @@ export const CAPTURE_SNAPSHOT_SCRIPT = String.raw`
       const rect = node.getBoundingClientRect();
       const style = globalThis.getComputedStyle(htmlNode);
       const isVisible = rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+      const inputValue = (node.tagName.toLowerCase() === 'input' && /^(submit|button|reset)$/i.test(node.type || '')) ? node.value : undefined;
       const accessibleName =
         node.getAttribute('aria-label') ||
         interactive?.getAttribute('aria-label') ||
         node.getAttribute('title') ||
         interactive?.getAttribute('title') ||
+        inputValue ||
         (interactive?.textContent || node.textContent || '').trim().substring(0, 100) ||
         undefined;
       const nodeId = node.getAttribute('id');
@@ -331,7 +334,7 @@ export const CAPTURE_SNAPSHOT_SCRIPT = String.raw`
       const wrappingLabel = node.closest('label');
       const nearbyLabel = explicitLabel || wrappingLabel || node.parentElement?.querySelector('label');
       const scope = node.closest('dialog, [role="dialog"], [aria-modal="true"], form, [data-slot="sheet-content"], [class*="drawer"], [class*="modal"]');
-      const row = node.closest('tr, [role="row"], [data-row-key], [data-testid*="row"], [class*="table-row"]');
+      const row = node.closest('tr, [role="row"], [data-row-key], [data-testid*="row"], [class*="table-row"], [class*="inventory_item"], [class*="card"], [class*="product"], [class*="item"], article, li, [data-test*="item"]');
 
       return {
         tag: node.tagName.toLowerCase(),
@@ -339,8 +342,8 @@ export const CAPTURE_SNAPSHOT_SCRIPT = String.raw`
         role: node.getAttribute('role') || (interactive && interactive.getAttribute('role')) || undefined,
         placeholder: node.getAttribute('placeholder') || undefined,
         ariaLabel: node.getAttribute('aria-label') || (interactive && interactive.getAttribute('aria-label')) || undefined,
-        text: (node.textContent || '').trim().substring(0, 100),
-        testId: node.getAttribute('data-testid') || (interactive && interactive.getAttribute('data-testid')) || undefined,
+        text: (inputValue || node.textContent || '').trim().substring(0, 100),
+        testId: node.getAttribute('data-test') || node.getAttribute('data-testid') || node.getAttribute('data-cy') || node.getAttribute('data-qa') || (interactive && (interactive.getAttribute('data-test') || interactive.getAttribute('data-testid') || interactive.getAttribute('data-cy') || interactive.getAttribute('data-qa'))) || undefined,
         dataSlot: node.getAttribute('data-slot') || (interactive && interactive.getAttribute('data-slot')) || undefined,
         dataValue: node.getAttribute('data-value') || (interactive && interactive.getAttribute('data-value')) || undefined,
         id: node.id || (interactive && interactive.id) || undefined,
@@ -472,15 +475,92 @@ export function buildCompactDomReport(
   return lines.join('\n') + '\n';
 }
 
-function locatorCandidates(page: Page, resolution: ResolvedLocator, target: string): Locator[] {
+function locatorCandidates(page: Page, resolution: ResolvedLocator, target: string, context?: string): Locator[] {
   const element = resolution.element;
   if (element?.selector) return [page.locator(element.selector)];
 
+  const cleanTarget = target.replace(/^['"]|['"]$/g, '');
+  const cleanContext = context ? context.replace(/['"]|(?:dong|san pham|item|row|record|cua|tren)\s*/gi, '').trim() : '';
+
+  if (cleanContext) {
+    const container = page.locator('tr, [role="row"], [class*="item"], [class*="card"], [class*="product"], article, li').filter({ hasText: cleanContext });
+    return [
+      container.getByRole('button', { name: cleanTarget }),
+      container.getByRole('link', { name: cleanTarget }),
+      container.locator(`button, a, input[type="submit"], [data-test*="cart"], [data-test*="add"], [data-test*="view"], [data-test*="${cleanTarget.toLowerCase().replace(/\\s+/g, '-')}"]`),
+      page.getByRole('button', { name: cleanTarget }),
+      page.locator(`[data-test*="${cleanTarget.toLowerCase().replace(/\\s+/g, '-')}"]`),
+    ];
+  }
+
   switch (resolution.matchedBy) {
+    case 'container_action_context':
+    case 'row_action_view':
+      return [
+        page.locator('tr, [role="row"], [class*="item"], [class*="card"], [class*="product"], article, li').filter({ hasText: cleanTarget }).getByRole('button'),
+        page.locator('tr, [role="row"], [class*="item"], [class*="card"], [class*="product"], article, li').filter({ hasText: cleanTarget }).locator('button, a, svg, [data-test*="view"], [data-test*="add"]'),
+      ];
+    case 'explicit_aria_role_sidebar':
+    case 'sidebar_navigation_fallback':
+      return [
+        page.getByRole('link', { name: cleanTarget }),
+        page.getByRole('button', { name: cleanTarget }),
+        page.locator('aside, nav, ul, [role="navigation"]').getByText(cleanTarget),
+        page.getByText(cleanTarget),
+      ];
+    case 'explicit_aria_role_button':
+    case 'role+name+fallback':
+      return [
+        page.getByRole('button', { name: cleanTarget }),
+        page.getByRole('tab', { name: cleanTarget }),
+        page.getByRole('link', { name: cleanTarget }),
+      ];
+    case 'explicit_aria_role_tab':
+      return [
+        page.getByRole('tab', { name: cleanTarget }),
+        page.getByRole('button', { name: cleanTarget }),
+        page.getByRole('link', { name: cleanTarget }),
+      ];
+    case 'explicit_aria_role_link':
+      return [
+        page.locator(`[data-test="${cleanTarget}"], [data-testid="${cleanTarget}"], [data-test*="${cleanTarget}" i], [data-testid*="${cleanTarget}" i]`),
+        page.locator(`a.${cleanTarget.replace(/-/g, '_')}, a.${cleanTarget}, a#${cleanTarget}`),
+        page.getByRole('link', { name: cleanTarget }),
+        page.getByRole('button', { name: cleanTarget }),
+        page.locator(`a[href*="${cleanTarget}" i]`),
+      ];
+    case 'explicit_aria_role_menuitem':
+      return [
+        page.getByRole('menuitem', { name: cleanTarget }),
+        page.getByRole('button', { name: cleanTarget }),
+      ];
+    case 'testId':
+      return element?.testId ? [page.locator(`[data-test="${element.testId}"], [data-testid="${element.testId}"]`), page.getByRole('button', { name: cleanTarget })] : [];
+    case 'input_submit':
+      return [
+        page.locator(`input[type="submit"][value="${cleanTarget}"], #${element?.id || 'login-button'}, [data-test="${element?.testId || 'login-button'}"]`),
+        page.getByRole('button', { name: cleanTarget }),
+        page.locator('#login-button, [data-test="login-button"], input[type="submit"]'),
+      ];
+    case 'pagination_next':
+      return [
+        page.getByRole('button', { name: '>' }),
+        page.locator('button:has-text(">"), [aria-label*="next" i], [title*="next" i], [data-slot*="next"]'),
+      ];
+    case 'pagination_prev':
+      return [
+        page.getByRole('button', { name: '<' }),
+        page.locator('button:has-text("<"), [aria-label*="prev" i], [title*="prev" i], [data-slot*="prev"]'),
+      ];
+    case 'page_size_trigger':
+      return [
+        page.getByRole('combobox'),
+        page.locator('[data-slot="select-trigger"], select, [aria-haspopup="listbox"]'),
+      ];
     case 'placeholder':
-      return element?.placeholder ? [page.getByPlaceholder(element.placeholder, { exact: true })] : [];
+      return element?.placeholder ? [page.getByPlaceholder(element.placeholder, { exact: true }), page.getByLabel(element.placeholder, { exact: true })] : [page.getByPlaceholder(cleanTarget), page.getByLabel(cleanTarget)];
     case 'ariaLabel':
-      return element?.ariaLabel ? [page.getByLabel(element.ariaLabel, { exact: true })] : [];
+      return element?.ariaLabel ? [page.getByLabel(element.ariaLabel, { exact: true })] : [page.getByLabel(cleanTarget)];
     case 'name':
       return element?.name ? [page.locator(`[name="${element.name}"]`)] : [];
     case 'id':
@@ -491,13 +571,26 @@ function locatorCandidates(page: Page, resolution: ResolvedLocator, target: stri
       return element?.text ? [page.getByRole(role, { name: element.text.trim(), exact: true })] : [];
     }
     case 'fallback_placeholder':
-      return [page.getByPlaceholder(target, { exact: true }), page.getByLabel(target, { exact: true })];
+      return [page.getByPlaceholder(target, { exact: true }), page.getByLabel(target, { exact: true }), page.locator('input[type="text"], input[type="search"], textarea')];
     case 'fallback_role_button':
-      return [page.getByRole('button', { name: target, exact: true }), page.getByText(target, { exact: true })];
+      return [
+        page.getByRole('button', { name: target, exact: true }),
+        page.getByRole('link', { name: target, exact: true }),
+        page.locator('#login-button, [data-test="login-button"], input[type="submit"], button[type="submit"]'),
+        page.getByText(target, { exact: true }),
+      ];
     case 'fallback_dropdown':
       return [page.getByRole('combobox', { name: target, exact: true }), page.getByText(target, { exact: true })];
     default:
-      return [];
+      return [
+        page.locator(`[data-test="${cleanTarget}"], [data-testid="${cleanTarget}"], [data-test*="${cleanTarget}" i], [data-testid*="${cleanTarget}" i]`),
+        page.locator(`.${cleanTarget.replace(/-/g, '_')}, .${cleanTarget}, #${cleanTarget}`),
+        page.getByRole('button', { name: cleanTarget }),
+        page.getByRole('link', { name: cleanTarget }),
+        page.getByRole('tab', { name: cleanTarget }),
+        page.locator('input[type="submit"], [data-test], [data-testid], aside, nav, ul').getByText(cleanTarget),
+        page.getByText(cleanTarget),
+      ];
   }
 }
 
@@ -601,6 +694,7 @@ async function uniqueLocatorFor(
   runtime: LocatorRuntime,
   context?: string,
   guidance?: CrawlerGuidanceContext,
+  ariaRole?: string,
 ): Promise<Locator> {
   const learned = findLearnedLocator(
     runtime.registry,
@@ -623,16 +717,19 @@ async function uniqueLocatorFor(
     console.warn(`[Crawler] Locator cũ của "${target}" đã hỏng; cần xác nhận lại.`);
   }
 
-  const resolution = resolveLocator(stepType, target, snapshot, context);
-  const candidates = locatorCandidates(page, resolution, target);
+  const resolution = resolveLocator(stepType, target, snapshot, context, ariaRole);
+  const candidates = locatorCandidates(page, resolution, target, context);
 
   for (const candidate of candidates) {
     try {
-      await candidate.first().waitFor({ state: 'attached', timeout: 4000 });
+      await candidate.first().waitFor({ state: 'attached', timeout: 3000 });
     } catch {
       continue;
     }
-    if (await candidate.count() === 1) return candidate;
+    const count = await candidate.count().catch(() => 0);
+    if (count >= 1 && await candidate.first().isVisible().catch(() => false)) {
+      return candidate.first();
+    }
   }
 
   if (runtime.guided) {
@@ -649,7 +746,7 @@ async function uniqueLocator(
   runtime: LocatorRuntime,
   guidance?: CrawlerGuidanceContext,
 ): Promise<Locator> {
-  return uniqueLocatorFor(page, step.type, step.target || '', snapshot, runtime, step.context, guidance);
+  return uniqueLocatorFor(page, step.type, step.target || '', snapshot, runtime, step.context, guidance, step.ariaRole || step.role);
 }
 
 export function describeStepForGuidance(step: ParsedStep): string {
@@ -673,7 +770,10 @@ export function describeStepForGuidance(step: ParsedStep): string {
 
 async function locatorIsUniqueAndVisible(locator: Locator): Promise<boolean> {
   try {
-    return await locator.count() === 1 && await locator.isVisible();
+    const count = await locator.count();
+    if (count === 1) return await locator.isVisible();
+    if (count > 1) return await locator.first().isVisible();
+    return false;
   } catch {
     return false;
   }
@@ -698,7 +798,7 @@ async function waitForVerifiedTarget(
   while (Date.now() <= deadline) {
     const resolution = resolveLocator(stepType, target, latestSnapshot, context);
     if (resolution.confidence !== 'low') {
-      const candidates = locatorCandidates(page, resolution, target);
+      const candidates = locatorCandidates(page, resolution, target, context);
       for (const candidate of candidates) {
         if (await locatorIsUniqueAndVisible(candidate)) return latestSnapshot;
       }
@@ -1013,7 +1113,7 @@ export async function runLive(
             } else if (step.type === 'select') {
               let locator = await uniqueLocator(page, step, beforeAction, runtime, guidance);
               if (await locator.evaluate(element => element.tagName.toLowerCase() === 'select')) {
-                await locator.selectOption({ label: step.value });
+                await locator.selectOption(step.value || '');
               } else {
                 await locator.click({ timeout: 10000 });
                 await waitForStateSettled(page);

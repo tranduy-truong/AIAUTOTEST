@@ -42,19 +42,56 @@ function collectNavLinksScript(baseDomain: string): string {
   return `
     (() => {
       const baseDomain = ${JSON.stringify(baseDomain)};
-      const anchors = Array.from(document.querySelectorAll('a[href]'));
       const links = [];
+
+      // 1. Quét tất cả các thẻ anchor <a href>
+      const anchors = Array.from(document.querySelectorAll('a[href]'));
       for (const anchor of anchors) {
         try {
+          const rawHref = anchor.getAttribute('href') || '';
+          if (!rawHref || rawHref.startsWith('javascript:') || rawHref === '#' || rawHref.startsWith('mailto:') || rawHref.startsWith('tel:')) {
+            continue;
+          }
           const url = new URL(anchor.href, document.location.href);
           if (url.hostname === baseDomain
               && url.protocol.startsWith('http')
-              && !url.hash
-              && url.pathname !== document.location.pathname) {
-            links.push(url.origin + url.pathname);
+              && !url.pathname.includes('dang-xuat')
+              && !url.pathname.includes('logout')
+              && !url.pathname.includes('signout')) {
+            const cleanUrl = url.origin + url.pathname + (url.search || '');
+            links.push(cleanUrl);
           }
         } catch {}
       }
+
+      // 2. Quét các phần tử menu/router SPA có data-href, data-path, routerlink, to
+      const routerElements = Array.from(document.querySelectorAll('[data-href], [data-path], [routerlink], [to], [data-menu-id]'));
+      for (const el of routerElements) {
+        try {
+          const pathVal = el.getAttribute('data-href') || el.getAttribute('data-path') || el.getAttribute('routerlink') || el.getAttribute('to') || el.getAttribute('data-menu-id') || '';
+          if (pathVal && !pathVal.startsWith('http') && pathVal.startsWith('/')) {
+            const fullUrl = new URL(pathVal, document.location.origin).href;
+            if (!fullUrl.includes('dang-xuat') && !fullUrl.includes('logout')) {
+              links.push(fullUrl);
+            }
+          }
+        } catch {}
+      }
+
+      // 3. Quét các thẻ li/div/span trong sidebar menu có thể chứa link
+      const sidebarLinks = Array.from(document.querySelectorAll('.sidebar a, nav a, .ant-menu a, [role="menu"] a, .menu a'));
+      for (const el of sidebarLinks) {
+        try {
+          const href = (el as HTMLAnchorElement).href;
+          if (href) {
+            const url = new URL(href, document.location.href);
+            if (url.hostname === baseDomain && !url.pathname.includes('logout')) {
+              links.push(url.origin + url.pathname + (url.search || ''));
+            }
+          }
+        } catch {}
+      }
+
       return [...new Set(links)];
     })()
   `;
@@ -71,7 +108,7 @@ async function waitForStableDom(page: Page): Promise<void> {
       { timeout: 8000 },
     );
     // Chờ thêm 500ms cho SPA render xong
-    await page.waitForTimeout(500);
+    await page.waitForTimeout(600);
   } catch {
     // Trang có thể không có element tương tác — vẫn snapshot
   }
@@ -83,9 +120,10 @@ export async function runDiscoveryCrawler(
   seedUrls: string[],
   authSession: AuthSession,
   options: DiscoveryCrawlerOptions = {},
+  authInfo?: { loginUrl?: string; username?: string; password?: string },
 ): Promise<DiscoveryResult> {
-  const maxPages = options.maxPages ?? 10;
-  const maxDepth = options.maxDepth ?? 2;
+  const maxPages = options.maxPages ?? 15;
+  const maxDepth = options.maxDepth ?? 3;
   const sameDomainOnly = options.sameDomainOnly ?? true;
   const headless = options.headless ?? true;
 
@@ -116,7 +154,7 @@ export async function runDiscoveryCrawler(
   try {
     const contextOptions: Record<string, unknown> = {};
 
-    // Inject auth session
+    // Inject auth session nếu có
     if (authSession.strategy === 'PLAYWRIGHT_STORAGE_STATE' && authSession.storageStatePath) {
       contextOptions['storageState'] = authSession.storageStatePath;
     }
@@ -126,6 +164,52 @@ export async function runDiscoveryCrawler(
 
     const context = await browser.newContext(contextOptions);
     const page = await context.newPage();
+
+    // ★ TỰ ĐỘNG ĐĂNG NHẬP TRỰC TIẾP TRƯỚC KHI QUÉT NẾU CÓ THÔNG TIN AUTH
+    if (authInfo?.loginUrl && authInfo?.username && authInfo?.password) {
+      console.log(`   🔐 [Discovery Auth] Đang đăng nhập tự động vào ${authInfo.loginUrl}...`);
+      try {
+        await page.goto(authInfo.loginUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
+        await waitForStableDom(page);
+
+        // Nhập username
+        await page.getByPlaceholder(/tên đăng nhập|username|user name|email/i)
+          .or(page.getByLabel(/tên đăng nhập|username|user name|email/i))
+          .or(page.locator('[data-test="username"], [data-testid="username"], #user-name, input[name*="user"], input[name*="email"], input[type="text"]'))
+          .first()
+          .fill(authInfo.username);
+
+        // Nhập password
+        await page.getByPlaceholder(/mật khẩu|password/i)
+          .or(page.getByLabel(/mật khẩu|password/i))
+          .or(page.locator('[data-test="password"], [data-testid="password"], #password, input[type="password"]'))
+          .first()
+          .fill(authInfo.password);
+
+        // Click Login
+        await page.getByRole('button', { name: /đăng nhập|login|sign in|submit/i })
+          .or(page.locator('[data-test="login-button"], [data-testid="login-button"], #login-button, input[type="submit"], button[type="submit"]'))
+          .first()
+          .click();
+
+        // Chờ chuyển hướng khỏi trang login hoặc mất form login
+        const initialLoginUrl = page.url();
+        await page.waitForURL(url => url.href !== initialLoginUrl && !url.href.includes('dang-nhap') && !url.href.includes('login'), { timeout: 15000 }).catch(() => {});
+        await waitForStableDom(page);
+
+        const currentUrlAfterLogin = page.url();
+        console.log(`   ✅ [Discovery Auth] Đăng nhập thành công! Trang đích: ${currentUrlAfterLogin}`);
+
+        // Đưa trang đích sau login vào queue đầu tiên
+        const normAfterLogin = normalizeUrl(currentUrlAfterLogin);
+        if (!visited.has(normAfterLogin)) {
+          queue.unshift({ url: normAfterLogin, depth: 0 });
+          visited.add(normAfterLogin);
+        }
+      } catch (authErr: any) {
+        console.warn(`   ⚠️ [Discovery Auth] Tự động đăng nhập không thành công: ${authErr.message}`);
+      }
+    }
 
     // BFS: Duyệt từng URL trong queue
     while (queue.length > 0 && pages.length < maxPages) {
@@ -178,7 +262,7 @@ export async function runDiscoveryCrawler(
         if (sameDomainOnly && depth < maxDepth) {
           for (const link of navLinks) {
             const normalized = normalizeUrl(link);
-            if (!visited.has(normalized) && queue.length + pages.length < maxPages * 2) {
+            if (!visited.has(normalized) && queue.length + pages.length < maxPages * 3) {
               try {
                 const linkDomain = new URL(normalized).hostname;
                 if (linkDomain === baseDomain) {

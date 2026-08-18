@@ -23,12 +23,12 @@ AI Planner **không chỉ kiểm thử đường dẫn thuận (Happy Path)** m�
 
 | Mã | Tên kịch bản | Thao tác (Action Steps) | Kỳ vọng hệ thống (Expected Result) |
 |---|---|---|---|
-| **WC_AUTH_01** | Truy cập trái phép Deep Link khi chưa đăng nhập | 1. Mở thẳng URL nội bộ (ví dụ: `/quan-tri/ton-giao/co-so`) trong tab ẩn danh sạch (chưa login). | Hệ thống **lập tức chuyển hướng (redirect) về trang `/dang-nhap`**, tuyệt đối không để lộ dữ liệu hay layout quản trị. |
-| **WC_AUTH_02** | Thử nghiệm SQL Injection trên Form Đăng nhập | 1. `fill` ô Tên đăng nhập: `' OR '1'='1`<br>2. `fill` ô Mật khẩu: `' OR '1'='1`<br>3. `click` Đăng nhập. | Hệ thống **không bị lỗi 500 / Crash**, hiển thị thông báo lỗi thân thiện: `"Tên đăng nhập hoặc mật khẩu không chính xác"`. |
-| **WC_AUTH_03** | Thử nghiệm XSS Payload trên ô Tên đăng nhập | 1. `fill` ô Tên đăng nhập: `<script>alert('XSS')</script>`<br>2. `fill` ô Mật khẩu: `123456`<br>3. `click` Đăng nhập. | Chuỗi script được escape an toàn, không thực thi mã độc, báo lỗi đăng nhập thất bại. |
-| **WC_AUTH_04** | Đăng nhập với các trường rỗng hoặc chỉ toàn khoảng trắng | 1. `fill` ô Tên đăng nhập: `   ` (3 dấu cách)<br>2. `fill` ô Mật khẩu: `   `<br>3. `click` Đăng nhập. | Giao diện hiển thị cảnh báo yêu cầu nhập tên đăng nhập/mật khẩu, không gửi request rác lên server. |
-| **WC_AUTH_05** | Đăng nhập sai mật khẩu nhiều lần (Rate Limit UX) | 1. `fill` đúng username: `admin`<br>2. `fill` sai password: `sai_mat_khau_123`<br>3. `click` Đăng nhập liên tiếp. | Hệ thống hiển thị thông báo rõ ràng về số lần thử hoặc yêu cầu thử lại sau X giây, không treo trình duyệt. |
-| **WC_AUTH_06** | Ẩn / Hiện mật khẩu trên form đăng nhập | 1. `fill` mật khẩu `123123`<br>2. `click` icon con mắt (Show/Hide password). | Thuộc tính ô nhập đổi từ `type="password"` sang `type="text"` và ngược lại. |
+| **WC_AUTH_01** | Truy cập trái phép Deep Link khi chưa đăng nhập | 1. Mở thẳng URL nội bộ (ví dụ: `/inventory.html`, `/dashboard`, `/admin`) trong tab ẩn danh sạch (chưa login). | Hệ thống **lập tức chuyển hướng (redirect) về trang đăng nhập (`/login` hoặc `/`)**, tuyệt đối không để lộ dữ liệu hay layout quản trị. |
+| **WC_AUTH_02** | Thử nghiệm SQL Injection trên Form Đăng nhập | 1. `fill` ô Username / Tên đăng nhập: `' OR '1'='1`<br>2. `fill` ô Password / Mật khẩu: `' OR '1'='1`<br>3. `click` Login / Đăng nhập. | Hệ thống **không bị lỗi 500 / Crash**, hiển thị thông báo lỗi thân thiện: `"Username and password do not match"` hoặc `"Tên đăng nhập/mật khẩu không đúng"`. |
+| **WC_AUTH_03** | Thử nghiệm XSS Payload trên ô Username | 1. `fill` ô Username: `<script>alert('XSS')</script>`<br>2. `fill` ô Password: `secret_sauce`<br>3. `click` Login. | Chuỗi script được escape an toàn, không thực thi mã độc, báo lỗi đăng nhập thất bại. |
+| **WC_AUTH_04** | Đăng nhập với các trường rỗng hoặc chỉ toàn khoảng trắng | 1. `fill` ô Username: `   ` (khoảng trắng)<br>2. `fill` ô Password: `   `<br>3. `click` Login. | Giao diện hiển thị cảnh báo yêu cầu nhập (ví dụ: `"Username is required"` hoặc viền đỏ), không gửi request rác lên server. |
+| **WC_AUTH_05** | Đăng nhập sai mật khẩu (Invalid Credentials UX) | 1. `fill` đúng username: `standard_user` (hoặc `admin`)<br>2. `fill` sai password: `wrong_password_123`<br>3. `click` Login. | Hệ thống hiển thị thông báo lỗi rõ ràng, không treo trình duyệt. |
+| **WC_AUTH_06** | Đăng xuất an toàn & Ngăn Back Browser (Logout & History Invalidation) | 1. Đăng nhập thành công<br>2. `click` menu Đăng xuất (Logout)<br>3. Bấm nút Back trên trình duyệt. | Người dùng không thể quay lại trang nội bộ mà bị giữ ở trang Login. |
 
 ---
 
@@ -36,11 +36,11 @@ AI Planner **không chỉ kiểm thử đường dẫn thuận (Happy Path)** m�
 
 | Mã | Tên kịch bản | Thao tác (Action Steps) | Kỳ vọng hệ thống (Expected Result) |
 |---|---|---|---|
-| **WC_DATA_01** | Chuỗi siêu dài (Extreme Length / Buffer Test) vào ô Tìm kiếm | 1. `fill` vào ô Tìm kiếm chuỗi 500+ ký tự: `TEST_STRING_LONG_...` (lặp lại 50 lần).<br>2. `press` Enter hoặc bấm Tìm kiếm. | Giao diện **không bị vỡ bố cục ngang (No horizontal scroll overflow)**, bảng hiển thị thông báo không tìm thấy kết quả hoặc cắt gọn an toàn. |
+| **WC_DATA_01** | Chuỗi siêu dài (Extreme Length / Buffer Test) vào ô Tìm kiếm / Nhập liệu | 1. `fill` vào ô Tìm kiếm / Textbox chuỗi 500+ ký tự: `TEST_STRING_LONG_...` (lặp lại 50 lần).<br>2. `press` Enter hoặc bấm Tìm kiếm / Submit. | Giao diện **không bị vỡ bố cục ngang (No horizontal scroll overflow)**, bảng hiển thị thông báo không tìm thấy kết quả hoặc cắt gọn an toàn. |
 | **WC_DATA_02** | Ký tự đặc biệt Regex & Meta-characters | 1. `fill` vào ô Tìm kiếm: `.*+?^${}()\|[]\\` và `!@#$%^&*~`. | Hệ thống không ném lỗi cú pháp Regex (Unhandled Regex Error), xử lý chuỗi như text thuần. |
-| **WC_DATA_03** | Ký tự Unicode, Emojis & Đa ngôn ngữ | 1. `fill` vào trường dữ liệu: `🚀 Tôn Giáo Việt Nam 🇻🇳 🕌 ⛪ 100% Valid`. | Dữ liệu hiển thị đúng chuẩn Unicode, không bị biến thành dấu hỏi `???` hoặc ký tự rác. |
-| **WC_DATA_04** | Khoảng trắng ở đầu và cuối chuỗi (Whitespace Trimming) | 1. `fill` vào ô tìm kiếm: `"   Chùa Vĩnh Nghiêm   "` (có khoảng trắng thừa ở 2 đầu). | Hệ thống tự động trim khoảng trắng và vẫn tìm thấy đúng bản ghi "Chùa Vĩnh Nghiêm". |
-| **WC_DATA_05** | Giá trị số âm, số 0, số thập phân cho trường Số lượng / Năm | 1. `fill` các trường năm/số lượng: `-2024`, `0`, `99999999999`. | Hệ thống hiển thị lỗi validation: `"Giá trị không hợp lệ"` hoặc chặn nhập số âm. |
+| **WC_DATA_03** | Ký tự Unicode, Emojis & Đa ngôn ngữ | 1. `fill` vào trường dữ liệu: `🚀 E-commerce Test 🇻🇳 🕌 ⛪ 100% Valid`. | Dữ liệu hiển thị đúng chuẩn Unicode, không bị biến thành dấu hỏi `???` hoặc ký tự rác. |
+| **WC_DATA_04** | Khoảng trắng ở đầu và cuối chuỗi (Whitespace Trimming) | 1. `fill` vào ô tìm kiếm: `"   Sauce Labs Backpack   "` (có khoảng trắng thừa ở 2 đầu). | Hệ thống tự động trim khoảng trắng và vẫn tìm thấy đúng bản ghi sản phẩm/dữ liệu. |
+| **WC_DATA_05** | Giá trị số âm, số 0, số thập phân cho trường Số lượng / Giá | 1. `fill` các trường số lượng/giá: `-10`, `0`, `99999999999`. | Hệ thống hiển thị lỗi validation: `"Invalid quantity"` / `"Giá trị không hợp lệ"` hoặc chặn nhập số âm. |
 
 ---
 
@@ -48,21 +48,26 @@ AI Planner **không chỉ kiểm thử đường dẫn thuận (Happy Path)** m�
 
 | Mã | Tên kịch bản | Thao tác (Action Steps) | Kỳ vọng hệ thống (Expected Result) |
 |---|---|---|---|
-| **WC_FORM_01** | Gửi Form hoàn toàn rỗng (Blank Form Submission) | 1. Mở form Thêm mới / Cập nhật.<br>2. Không điền bất kỳ trường nào.<br>3. `click` Lưu / Thêm mới. | **Tất cả các trường bắt buộc** đồng loạt viền đỏ và hiển thị dòng chữ lỗi cụ thể (ví dụ: `"Vui lòng nhập tên cơ sở"`), form không bị gửi đi. |
-| **WC_FORM_02** | Chống bấm nút liên tục (Double Submission / Spam Click) | 1. Điền thông tin hợp lệ vào form.<br>2. `click` liên tiếp 3 lần cực nhanh vào nút "Lưu" (Spam click). | Nút bấm tự động chuyển sang trạng thái **Disabled / Loading Spinner** sau cú click đầu tiên, ngăn chặn việc tạo 2 bản ghi trùng lặp trong Database. |
-| **WC_FORM_03** | Hủy form giữa chừng & Reset trạng thái (Form Abandonment) | 1. Mở modal Thêm mới.<br>2. Nhập một nửa thông tin dở dang.<br>3. `click` nút "Hủy" hoặc "Đóng" (hoặc phím Escape).<br>4. Mở lại modal Thêm mới. | Modal mở lại với **trạng thái hoàn toàn sạch (Clean Form)**, không còn lưu các dữ liệu rác đã nhập trước đó. |
-| **WC_FORM_04** | Nhập dữ liệu trùng lặp trường định danh duy nhất (Duplicate Key) | 1. Mở form Thêm mới.<br>2. Nhập Mã cơ sở / CCCD đã tồn tại trong hệ thống (ví dụ: `CSTG001`).<br>3. `click` Lưu. | Hệ thống thông báo rõ ràng: `"Mã cơ sở đã tồn tại trong hệ thống"`, trỏ đúng vào ô bị trùng. |
+| **WC_FORM_01** | Gửi Form hoàn toàn rỗng (Blank Form Submission) | 1. Mở form Thêm mới / Checkout / Cập nhật.<br>2. Không điền bất kỳ trường nào.<br>3. `click` nút Submit / Tiếp tục / Lưu. | **Tất cả các trường bắt buộc** đồng loạt viền đỏ và hiển thị dòng chữ lỗi cụ thể (ví dụ: `"First Name is required"`, `"Vui lòng nhập..."`), form không bị gửi đi. |
+| **WC_FORM_02** | Chống bấm nút liên tục (Double Submission / Spam Click) | 1. Điền thông tin hợp lệ vào form.<br>2. `click` liên tiếp 3 lần cực nhanh vào nút Submit (Spam click). | Nút bấm tự động chuyển sang trạng thái **Disabled / Loading Spinner** sau cú click đầu tiên, ngăn chặn việc tạo 2 bản ghi/đơn hàng trùng lặp trong Database. |
+| **WC_FORM_03** | Hủy form giữa chừng & Reset trạng thái (Form Abandonment) | 1. Mở modal Thêm mới / Form nhập.<br>2. Nhập một nửa thông tin dở dang.<br>3. `click` nút "Hủy" hoặc "Cancel" (hoặc phím Escape).<br>4. Mở lại modal. | Modal mở lại với **trạng thái hoàn toàn sạch (Clean Form)**, không còn lưu các dữ liệu rác đã nhập trước đó. |
+| **WC_FORM_04** | Nhập dữ liệu trùng lặp trường định danh duy nhất (Duplicate Key) | 1. Mở form tạo mới.<br>2. Nhập Mã / SKU / Username đã tồn tại trong hệ thống.<br>3. `click` Lưu / Submit. | Hệ thống thông báo rõ ràng: `"Already exists in system"`, trỏ đúng vào ô bị trùng. |
 
 ---
 
-### 📊 NHÓM 4: BẢNG DỮ LIỆU, TÌM KIẾM, LỌC & PHÂN TRANG (GRID & SEARCH UX - MEDIUM/HIGH)
+### 📊 NHÓM 4: BẢNG DỮ LIỆU, TÌM KIẾM, LỌC, PHÂN TRANG & SỐ DÒNG/TRANG (GRID, PAGINATION & PAGE SIZE UX - HIGH)
 
 | Mã | Tên kịch bản | Thao tác (Action Steps) | Kỳ vọng hệ thống (Expected Result) |
 |---|---|---|---|
 | **WC_GRID_01** | Tìm kiếm không có kết quả (Empty State UX) | 1. `fill` từ khóa vô nghĩa: `__KHONG_THE_TIM_THAY_DU_LIEU_99999__`.<br>2. `click` Tìm kiếm. | Bảng hiển thị **thông báo / hình ảnh Empty State thân thiện** (`"Không tìm thấy dữ liệu phù hợp"`), không để bảng trống trơn hay bị sập layout. |
-| **WC_GRID_02** | Chuyển đổi Tab phân loại liên tục (Rapid Tab Switching Race Condition) | 1. `click` Tab 1 (Chức sắc) $\rightarrow$ Ngay lập tức `click` Tab 2 (Chức việc) $\rightarrow$ `click` Tab 3 (Nhà tu hành) trong 1 giây. | Dữ liệu hiển thị cuối cùng phải khớp 100% với Tab đang active, không bị hiển thị chồng chéo dữ liệu cũ do bất đồng bộ (Async race condition). |
-| **WC_GRID_03** | Xóa bộ lọc tìm kiếm (Clear Filter / Reset State) | 1. Nhập từ khóa tìm kiếm và chọn bộ lọc $\rightarrow$ Bấm Tìm.<br>2. `click` nút "Làm mới" / "Đặt lại" / Xóa ô tìm kiếm. | Bảng dữ liệu lập tức khôi phục về danh sách đầy đủ ban đầu. |
-| **WC_GRID_04** | Phân trang ở các vị trí biên (Pagination Boundary) | 1. Ở trang 1: Kiểm tra nút "Trang trước" (Previous) bị **Disabled**.<br>2. Chuyển đến trang cuối: Kiểm tra nút "Trang sau" (Next) bị **Disabled**. | Người dùng không thể bấm vượt quá số trang hiện có. |
+| **WC_GRID_02** | Xóa bộ lọc tìm kiếm & Khôi phục danh sách đầy đủ | 1. Nhập từ khóa tìm kiếm (ví dụ: `CSTG008`) $\rightarrow$ Bấm Tìm kiếm.<br>2. Xóa ô tìm kiếm về rỗng $\rightarrow$ Bấm Tìm kiếm. | Bảng dữ liệu lập tức khôi phục về danh sách đầy đủ ban đầu (ví dụ: đủ 11 dòng). |
+| **WC_GRID_03** | Chuyển đổi Tab phân loại liên tục (Rapid Tab Switching Race Condition) | 1. `click` Tab 1 (Chức sắc) $\rightarrow$ Ngay lập tức `click` Tab 2 (Chức việc) $\rightarrow$ `click` Tab 3 (Nhà tu hành) trong 1 giây. | Dữ liệu hiển thị cuối cùng phải khớp 100% với Tab đang active, không bị hiển thị chồng chéo dữ liệu cũ do bất đồng bộ (Async race condition). |
+| **WC_PAGE_01** | Chuyển trang qua lại trên Bảng dữ liệu (Pagination Navigation) | 1. Đang ở Trang 1/2: `click` nút chuyển trang sau (`>`).<br>2. Kiểm tra bảng tải dữ liệu của Trang 2 (ví dụ: các mã `CSTG027`...) và hiển thị `Trang 2 / 2`.<br>3. `click` nút chuyển trang trước (`<`) để quay lại Trang 1. | Dữ liệu chuyển đổi mượt mà, hiển thị đúng bản ghi trang tương ứng và số trang cập nhật chính xác. |
+| **WC_PAGE_02** | Phân trang ở các vị trí biên (Pagination Boundary & Debounce) | 1. Ở trang 1: Kiểm tra nút "Trang trước" (`<`) ở trạng thái **Disabled** (hoặc không kích hoạt reload lỗi).<br>2. Chuyển đến trang cuối (Trang 2): Kiểm tra nút "Trang sau" (`>`) ở trạng thái **Disabled**. | Người dùng không thể bấm vượt quá số trang hiện có. |
+| **WC_PAGE_03** | Thay đổi Số dòng/trang (Page Size Selection - 10 lên 20 dòng) | 1. Đang ở chế độ hiển thị 10 dòng/trang (Trang 1/2).<br>2. `click` dropdown **Số dòng/trang** $\rightarrow$ chọn `20` (hoặc `50`). | Bảng gom toàn bộ dữ liệu (tất cả 11 dòng) vào 1 trang duy nhất, tổng số trang đổi thành `1 / 1`, các nút chuyển trang `<` và `>` đều bị disabled. |
+| **WC_PAGE_04** | Đổi Số dòng/trang khi đang ở Trang sau (Page Reset Boundary) | 1. `click` chuyển sang Trang 2.<br>2. `click` đổi Số dòng/trang từ 10 lên 20. | Hệ thống tự động reset về `Trang 1 / 1` chứa đầy đủ dữ liệu, không bị kẹt ở trang rỗng. |
+| **WC_VIEW_01** | Xem chi tiết bản ghi & Đóng Modal (Row Action View Details) | 1. `click` icon Mắt (👁️) / nút Xem chi tiết trên dòng dữ liệu cụ thể (ví dụ: `CSTG008`).<br>2. Kiểm tra Drawer / Modal mở ra hiển thị thông tin chi tiết của bản ghi.<br>3. `click` nút Đóng / icon X / phím Escape. | Modal đóng lại sạch sẽ, không che khuất màn hình và bảng dữ liệu vẫn giữ nguyên vẹn. |
+| **WC_NAV_01** | Điều hướng qua lại giữa các menu phân hệ trên Sidebar | 1. `click` menu "Cơ sở" trên Sidebar $\rightarrow$ URL vào `/co-so`.<br>2. `click` menu "Tổ chức" trên Sidebar $\rightarrow$ URL vào `/to-chuc`. | Điều hướng ổn định, không bị xung đột routing SPA hay kẹt trạng thái filter cũ. |
 
 ---
 

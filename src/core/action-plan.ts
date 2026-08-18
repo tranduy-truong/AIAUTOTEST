@@ -55,14 +55,15 @@ function resolveWithSharedEvidence(
   pageUrl: string,
   sharedSnapshots: DomSnapshot[],
 ): ResolvedLocator {
-  let best = resolveLocator(step.type, step.target || '', currentSnapshot, step.context);
+  const explicitAriaRole = step.ariaRole || step.role;
+  let best = resolveLocator(step.type, step.target || '', currentSnapshot, step.context, explicitAriaRole);
   if (best.confidence !== 'low') return best;
 
   const expectedUrl = normalizedPageUrl(currentSnapshot?.url || pageUrl);
   for (const snapshot of sharedSnapshots) {
     if (expectedUrl && normalizedPageUrl(snapshot.url) !== expectedUrl) continue;
 
-    const candidate = resolveLocator(step.type, step.target || '', snapshot, step.context);
+    const candidate = resolveLocator(step.type, step.target || '', snapshot, step.context, explicitAriaRole);
     if (confidenceRank(candidate.confidence) > confidenceRank(best.confidence)) {
       best = candidate;
     }
@@ -153,9 +154,9 @@ export function buildActionPlan(
               targetPath = afterSnapshot.url;
             }
             if (targetPath && targetPath !== '/') {
-              playwrightCode += `\nawait page.waitForURL(url => url.href.includes('${escapeSingleQuoted(targetPath)}') || !url.href.includes('dang-nhap'), { timeout: 20000 }).catch(() => {});`;
+              playwrightCode += `\nawait page.waitForURL(url => url.href.includes('${escapeSingleQuoted(targetPath)}'), { timeout: 20000 }).catch(() => {});`;
             } else {
-              playwrightCode += `\nawait page.waitForURL(url => !url.href.includes('dang-nhap'), { timeout: 20000 }).catch(() => {});`;
+              playwrightCode += `\nawait page.waitForLoadState('domcontentloaded').catch(() => {});`;
             }
           }
           confidence = clickRes.confidence || 'medium';
@@ -173,8 +174,8 @@ export function buildActionPlan(
           );
           verifiedSelector = triggerRes.element?.selector;
 
-          if (triggerRes.element?.tag === 'select') {
-            playwrightCode = `await ${triggerRes.locator}.selectOption({ label: '${escapeSingleQuoted(step.value || '')}' });`;
+          if (triggerRes.element?.tag === 'select' || /select/i.test(triggerRes.locator)) {
+            playwrightCode = `await ${triggerRes.locator}.selectOption('${escapeSingleQuoted(step.value || '')}');`;
             confidence = triggerRes.confidence;
             matchedBy = triggerRes.matchedBy;
             break;
@@ -276,7 +277,7 @@ function compileAssertion(assertion: ParsedAssertion): {
   switch (assertion.kind) {
     case 'text_visible':
       return {
-        code: `await expect(page.getByText('${value}', { exact: true })).toBeVisible();`,
+        code: `await expect(page.getByText('${value}').first()).toBeVisible();`,
         confidence: 'high',
       };
     case 'url_contains':
@@ -291,7 +292,7 @@ function compileAssertion(assertion: ParsedAssertion): {
       };
     case 'attribute':
       return {
-        code: `await expect(page.getByPlaceholder('Nhập mật khẩu')).toHaveAttribute('type', '${assertion.value}');`,
+        code: `await expect(page.getByPlaceholder('Nhập mật khẩu').or(page.getByLabel('Nhập mật khẩu')).first()).toHaveAttribute('type', '${assertion.value}');`,
         confidence: 'high',
       };
     case 'unknown':

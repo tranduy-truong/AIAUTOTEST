@@ -10,6 +10,10 @@ export type ParsedAssertion =
 export interface ParsedStep {
   type: PlannerStepType;
   target?: string;
+  ariaRole?: 'tab' | 'button' | 'link' | 'menuitem' | 'sidebar' | 'combobox' | 'textbox' | string;
+  role?: string;
+  elementType?: string;
+  selectorHint?: string;
   value?: string;
   url?: string;
   context?: string;

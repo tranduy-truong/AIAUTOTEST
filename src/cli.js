@@ -11,25 +11,21 @@ import { runUnitGenerator } from "./agents/generator/unit-generator.js";
 import { runHealer } from "./agents/healer/run.js";
 import { plannerPlanToTestCases } from "./agents/planner/schema.js";
 import { buildActionPlan } from "./core/action-plan.js";
-import { buildCompactDomReport, runLive } from "./agents/crawler/live-runner.js";
 import {
-  captureAuthSession,
-} from "./core/auth/auth-capture.js";
-import {
-  isAuthSessionValid,
-  loadAuthConfig,
-  loadAuthSession,
-  clearAuthSession,
-  createNoAuthSession,
-  SESSION_PATH,
-} from "./core/auth/auth-session.js";
+  buildCompactDomReport,
+  runLive,
+} from "./agents/crawler/live-runner.js";
+import { runApiTestWizard } from "./core/integration/api/wizard.js";
 import {
   analyzeUnitInput,
   createUnitSession,
   loadUnitContext,
   loadUnitSession,
 } from "./core/unit/artifacts.js";
-import { runLastGeneratedUnitTests, summarizeUnitRunOutput } from "./core/unit/runner.js";
+import {
+  runLastGeneratedUnitTests,
+  summarizeUnitRunOutput,
+} from "./core/unit/runner.js";
 import { evaluateUnitPlanOracleGates } from "./core/unit/oracle/oracle-gate-summary.js";
 import { runUnitCoverageGuidedLoop } from "./agents/planner/unit-coverage-loop.js";
 import { runIntegrationSandbox } from "./core/integration/sandbox-orchestrator.js";
@@ -78,7 +74,11 @@ async function mainMenu() {
       message: "Chọn chức năng",
       choices: [
         {
-          name: menuChoice("01", "Lên kế hoạch & sinh test", "Planner → Generator"),
+          name: menuChoice(
+            "01",
+            "Lên kế hoạch & sinh test",
+            "Planner → Generator",
+          ),
           value: "plan_and_generate",
         },
         {
@@ -90,8 +90,21 @@ async function mainMenu() {
           value: "run_e2e",
         },
         {
-          name: menuChoice("04", "Chạy Integration", "API • database"),
+          name: menuChoice(
+            "03",
+            "Chạy Integration",
+            "API • database (Sandbox)",
+          ),
           value: "run_integration",
+        },
+
+        {
+          name: menuChoice(
+            "04",
+            "Test API",
+            "Nạp OpenAPI/Swagger → Tự động test",
+          ),
+          value: "api_wizard",
         },
         {
           name: menuChoice("05", "Chạy Unit Test", "Vitest • logic nội bộ"),
@@ -101,6 +114,7 @@ async function mainMenu() {
           name: menuChoice("06", "Xác nhận kết quả Unit", "Tiếp tục phiên đang chờ"),
           value: "review_unit_oracles",
         },
+
         {
           name: menuChoice("07", "Xem báo cáo", "Kết quả gần nhất"),
           value: "view_report",
@@ -127,6 +141,10 @@ async function mainMenu() {
     case "run_integration":
       await runTests("integration");
       break;
+    case "api_wizard":
+      await runApiTestWizard();
+      await returnToMenu();
+      return;
     case "run_unit":
       await runTests("unit");
       break;
@@ -582,18 +600,44 @@ Vi du:
 
       contextData = scriptContent;
     }
-
   } else if (level === "integration") {
+
     const { apiDesc } = await inquirer.prompt([
       {
         type: "input",
         name: "apiDesc",
-        message: "Nhập Endpoint API hoặc dán cấu trúc JSON/Swagger vào đây:",
+        message: "Nhập Endpoint API, kịch bản hoặc đường dẫn file OpenAPI/Swagger:",
       },
     ]);
-    contextData = apiDesc;
+
+    // Chuẩn hóa đường dẫn nếu người dùng kéo thả file hoặc dán dạng PowerShell & 'path'
+    let cleanedInput = apiDesc.trim().replace(/^&\s*/, '').replace(/^['"]|['"]$/g, '');
+    let resolvedPath = path.resolve(process.cwd(), cleanedInput);
+
+    if (fs.existsSync(resolvedPath) && fs.statSync(resolvedPath).isFile()) {
+      console.log(`\n📂 Đã nhận diện file đặc tả: ${resolvedPath}`);
+      try {
+        const fileExt = path.extname(resolvedPath).toLowerCase();
+        if (fileExt === '.yaml' || fileExt === '.yml' || fileExt === '.json') {
+          // Nạp file qua contract-loader / fs
+          const rawContent = fs.readFileSync(resolvedPath, 'utf-8');
+          contextData = `[FILE ĐẶC TẢ API: ${path.basename(resolvedPath)}]\n${rawContent}`;
+        } else {
+          contextData = fs.readFileSync(resolvedPath, 'utf-8');
+        }
+      } catch (err) {
+        console.error(`⚠️ Lỗi khi đọc file: ${err.message}. Sẽ dùng trực tiếp nội dung nhập.`);
+        contextData = apiDesc;
+      }
+    } else {
+      contextData = apiDesc;
+    }
   } else if (level === "unit") {
-    section("UNIT", "Kiểm thử Whitebox", "Đọc source thật • phân tích AST • sinh Vitest có kiểm chứng");
+    section(
+      "UNIT",
+      "Kiểm thử Whitebox",
+      "Đọc source thật • phân tích AST • sinh Vitest có kiểm chứng",
+    );
     const { inputMode } = await inquirer.prompt([
       {
         type: "list",
@@ -615,7 +659,12 @@ Vi du:
           message: "Dán code JavaScript/TypeScript (target phải có export):",
         },
       ]);
-      const snippetDir = path.join(process.cwd(), ".testkit", "unit-inputs", `snippet_${Date.now()}`);
+      const snippetDir = path.join(
+        process.cwd(),
+        ".testkit",
+        "unit-inputs",
+        `snippet_${Date.now()}`,
+      );
       fs.mkdirSync(snippetDir, { recursive: true });
       unitInputPath = path.join(snippetDir, "snippet.ts");
       fs.writeFileSync(unitInputPath, `${pastedCode.trim()}\n`);
@@ -624,10 +673,12 @@ Vi du:
         {
           type: "input",
           name: "sourcePath",
-          message: inputMode === "folder"
-            ? "Nhập đường dẫn thư mục gốc dự án cần test:"
-            : "Nhập đường dẫn file nguồn cần test:",
-          validate: value => value.trim() ? true : "Đường dẫn không được để trống.",
+          message:
+            inputMode === "folder"
+              ? "Nhập đường dẫn thư mục gốc dự án cần test:"
+              : "Nhập đường dẫn file nguồn cần test:",
+          validate: (value) =>
+            value.trim() ? true : "Đường dẫn không được để trống.",
         },
       ]);
       unitInputPath = path.resolve(sourcePath.trim());
@@ -641,27 +692,38 @@ Vi du:
       await returnToMenu();
       return;
     }
-    const eligibleTargets = analysis.index.targets.filter(target => target.executionMode !== "UNSUPPORTED");
+    const eligibleTargets = analysis.index.targets.filter(
+      (target) => target.executionMode !== "UNSUPPORTED",
+    );
     if (eligibleTargets.length === 0) {
       uiError("Không tìm thấy hàm/class được export để sinh Unit Test.");
-      detail("Yêu cầu", "Target phải được export để file test import source thật.");
+      detail(
+        "Yêu cầu",
+        "Target phải được export để file test import source thật.",
+      );
       await returnToMenu();
       return;
     }
     summary("Kết quả quét mã nguồn", [
       ["Dự án", analysis.manifest.projectName],
       ["File nguồn", String(analysis.manifest.sourceFiles.length)],
-      ["Target", `${eligibleTargets.length}/${analysis.index.targets.length} có thể test`],
+      [
+        "Target",
+        `${eligibleTargets.length}/${analysis.index.targets.length} có thể test`,
+      ],
       ["Framework", analysis.manifest.testFramework],
     ]);
     if (analysis.manifest.testFramework === "unknown") {
       uiError("Dự án chưa cấu hình Vitest hoặc Jest.");
-      detail("Hành động", "Cấu hình test runner trong dự án đích rồi quét lại.");
+      detail(
+        "Hành động",
+        "Cấu hình test runner trong dự án đích rồi quét lại.",
+      );
       await returnToMenu();
       return;
     }
 
-    let selectedTargetIds = eligibleTargets.map(target => target.id);
+    let selectedTargetIds = eligibleTargets.map((target) => target.id);
     if (eligibleTargets.length > 1) {
       const { selectionMode } = await inquirer.prompt([
         {
@@ -670,7 +732,10 @@ Vi du:
           message: "Chọn phạm vi Planner Unit:",
           choices: [
             { name: "Chọn hàm/class cụ thể (khuyến nghị)", value: "choose" },
-            { name: `Phân tích tất cả ${eligibleTargets.length} target`, value: "all" },
+            {
+              name: `Phân tích tất cả ${eligibleTargets.length} target`,
+              value: "all",
+            },
           ],
         },
       ]);
@@ -681,11 +746,12 @@ Vi du:
             name: "selected",
             message: "Chọn target cần sinh test:",
             pageSize: 20,
-            choices: eligibleTargets.map(target => ({
+            choices: eligibleTargets.map((target) => ({
               name: `${target.sourceFile}  ›  ${target.symbol} ${profile(target.profile)}`,
               value: target.id,
             })),
-            validate: value => value.length > 0 ? true : "Phải chọn ít nhất một target.",
+            validate: (value) =>
+              value.length > 0 ? true : "Phải chọn ít nhất một target.",
           },
         ]);
         selectedTargetIds = selected;
@@ -695,7 +761,8 @@ Vi du:
       {
         type: "editor",
         name: "requirements",
-        message: "Nhập yêu cầu nghiệp vụ/expected nhiều dòng (lưu và đóng editor khi xong):",
+        message:
+          "Nhập yêu cầu nghiệp vụ/expected nhiều dòng (lưu và đóng editor khi xong):",
       },
     ]);
     const normalizedRequirements = String(requirements || "").trim();
@@ -703,10 +770,17 @@ Vi du:
       const requirementLineCount = normalizedRequirements.split(/\r?\n/).length;
       success(`Đã nhận đầy đủ ${requirementLineCount} dòng yêu cầu nghiệp vụ.`);
     } else {
-      detail("Yêu cầu nghiệp vụ", "Để trống; hệ thống chỉ kiểm tra hành vi suy ra từ source.");
+      detail(
+        "Yêu cầu nghiệp vụ",
+        "Để trống; hệ thống chỉ kiểm tra hành vi suy ra từ source.",
+      );
     }
     try {
-      const prepared = createUnitSession(analysis, selectedTargetIds, normalizedRequirements);
+      const prepared = createUnitSession(
+        analysis,
+        selectedTargetIds,
+        normalizedRequirements,
+      );
       contextData = JSON.stringify(prepared.context);
       success("Đã chuẩn bị dữ liệu cho Planner.");
       artifact("Phiên chạy", path.basename(prepared.session.runDirectory));
@@ -718,7 +792,8 @@ Vi du:
   }
 
   // Bước 1: Gọi Planner
-  const isPlanSuccess = plannerCompleted || await runPlanner(level, contextData);
+  const isPlanSuccess =
+    plannerCompleted || (await runPlanner(level, contextData));
 
   if (isPlanSuccess) {
     const { confirmGen } = await inquirer.prompt([
@@ -773,14 +848,18 @@ Vi du:
 }
 
 function editableOracleValue(value) {
-  if (value && typeof value === "object" && value.$type === "undefined") return "undefined";
+  if (value && typeof value === "object" && value.$type === "undefined")
+    return "undefined";
   if (typeof value === "string") return value;
   if (value === undefined) return "";
   return JSON.stringify(value);
 }
 
 async function askTesterExpected(proposed) {
-  if (!proposed) throw new Error("Chưa có dạng kết quả đề xuất để tester chỉnh sửa an toàn.");
+  if (!proposed)
+    throw new Error(
+      "Chưa có dạng kết quả đề xuất để tester chỉnh sửa an toàn.",
+    );
   const kind = proposed.kind;
   if (kind === "return" || kind === "resolve") {
     const { rawValue } = await inquirer.prompt([
@@ -789,7 +868,7 @@ async function askTesterExpected(proposed) {
         name: "rawValue",
         message: "Nhập giá trị đúng (ví dụ: true, 10, văn bản hoặc JSON):",
         default: editableOracleValue(proposed?.value),
-        validate: value => {
+        validate: (value) => {
           try {
             parseTesterDataValue(value);
             return true;
@@ -801,23 +880,28 @@ async function askTesterExpected(proposed) {
     ]);
     return { kind, value: parseTesterDataValue(rawValue) };
   }
-  const proposedMessage = proposed?.error?.message?.value
-    || proposed?.message
-    || (typeof proposed?.value === "string" ? proposed.value : "");
+  const proposedMessage =
+    proposed?.error?.message?.value ||
+    proposed?.message ||
+    (typeof proposed?.value === "string" ? proposed.value : "");
   const { errorMessage, match } = await inquirer.prompt([
     {
       type: "input",
       name: "errorMessage",
       message: "Thông báo lỗi đúng là gì?",
       default: proposedMessage,
-      validate: value => value.trim() ? true : "Thông báo lỗi không được để trống.",
+      validate: (value) =>
+        value.trim() ? true : "Thông báo lỗi không được để trống.",
     },
     {
       type: "list",
       name: "match",
       message: "So sánh thông báo lỗi theo cách nào?",
       choices: [
-        { name: "Chỉ cần có chứa nội dung này (khuyến nghị)", value: "contains" },
+        {
+          name: "Chỉ cần có chứa nội dung này (khuyến nghị)",
+          value: "contains",
+        },
         { name: "Phải giống hoàn toàn", value: "equals" },
       ],
     },
@@ -829,16 +913,28 @@ async function askTesterExpected(proposed) {
 }
 
 function showOracleRequest(request, index, total) {
-  section("03", `Xác nhận kết quả ${index + 1}/${total}`, "Không cần đọc source code hay mở file JSON");
-  summary("Tester cần quyết định", [
-    ["Chức năng", humanizeUnitTarget(request.target)],
-    ["Trường hợp", request.name || request.testCaseId],
-    ["Đề xuất", formatExpectedForTester(request.proposedExpected)],
-  ], "warning");
+  section(
+    "03",
+    `Xác nhận kết quả ${index + 1}/${total}`,
+    "Không cần đọc source code hay mở file JSON",
+  );
+  summary(
+    "Tester cần quyết định",
+    [
+      ["Chức năng", humanizeUnitTarget(request.target)],
+      ["Trường hợp", request.name || request.testCaseId],
+      ["Đề xuất", formatExpectedForTester(request.proposedExpected)],
+    ],
+    "warning",
+  );
   console.log(`\n   ${paint.bold("Dữ liệu đầu vào")}`);
   for (const line of formatInputsForTester(request.inputs)) detail("", line);
-  console.log(`\n   ${paint.muted("Hệ thống chưa thể tự chứng minh kết quả này từ mã nguồn.")}`);
-  console.log(`   ${paint.muted("Tester chỉ xác nhận khi đây đúng là hành vi mong muốn của nghiệp vụ.")}`);
+  console.log(
+    `\n   ${paint.muted("Hệ thống chưa thể tự chứng minh kết quả này từ mã nguồn.")}`,
+  );
+  console.log(
+    `   ${paint.muted("Tester chỉ xác nhận khi đây đúng là hành vi mong muốn của nghiệp vụ.")}`,
+  );
 }
 
 async function reviewPendingUnitOracles({ askToStart = true } = {}) {
@@ -881,7 +977,10 @@ async function reviewPendingUnitOracles({ askToStart = true } = {}) {
           value: "confirm",
         });
         if (request.proposedExpected.kind !== "side-effect") {
-          choices.push({ name: "Kết quả chưa đúng, tôi muốn nhập lại", value: "edit" });
+          choices.push({
+            name: "Kết quả chưa đúng, tôi muốn nhập lại",
+            value: "edit",
+          });
         }
       }
       choices.push(
@@ -945,14 +1044,22 @@ async function reviewPendingUnitOracles({ askToStart = true } = {}) {
     uiError(`Không lưu được xác nhận: ${error.message}`);
     return false;
   }
-  summary("Đã lưu lựa chọn của tester", [
-    ["Đã xác nhận", String(result.confirmedCount)],
-    ["Tạm bỏ qua", String(result.skippedCount)],
-    ["Cần xem lại", String(result.needsReviewCount)],
-  ], result.confirmedCount > 0 ? "success" : "warning");
+  summary(
+    "Đã lưu lựa chọn của tester",
+    [
+      ["Đã xác nhận", String(result.confirmedCount)],
+      ["Tạm bỏ qua", String(result.skippedCount)],
+      ["Cần xem lại", String(result.needsReviewCount)],
+    ],
+    result.confirmedCount > 0 ? "success" : "warning",
+  );
 
   if (result.confirmedTargetIds.length > 0) {
-    section("04", "Tạo lại Unit Test", "Dùng xác nhận vừa nhập • không gọi Planner • không gọi AI");
+    section(
+      "04",
+      "Tạo lại Unit Test",
+      "Dùng xác nhận vừa nhập • không gọi Planner • không gọi AI",
+    );
     await runUnitGenerator({
       preserveExistingFiles: true,
       onlyTargetIds: result.confirmedTargetIds,
@@ -963,7 +1070,11 @@ async function reviewPendingUnitOracles({ askToStart = true } = {}) {
 
 // 3. TÍNH NĂNG: CHẠY TEST VÀ KÍCH HOẠT CHÍNH SÁCH BẮT LỖI
 async function runTests(level) {
-  section("RUN", `Chạy ${level.toUpperCase()}`, "Thực thi test và tổng hợp kết quả");
+  section(
+    "RUN",
+    `Chạy ${level.toUpperCase()}`,
+    "Thực thi test và tổng hợp kết quả",
+  );
 
   if (level === "unit") {
     let gateReport;
@@ -982,19 +1093,36 @@ async function runTests(level) {
       return;
     }
     detail("Dự án", path.basename(unitResult.cwd));
-    const runSummary = summarizeUnitRunOutput(unitResult.stdout, unitResult.stderr);
-    summary("Kết quả thực thi", [
-      ["File test", `${runSummary.passedFiles}/${runSummary.totalFiles} pass`],
-      ["Test case", `${runSummary.passedTests}/${runSummary.totalTests} pass`],
-      ["Thất bại", String(runSummary.failedTests)],
-      ["Coverage", unitResult.coverageEnabled ? "Đã bật" : "Chưa bật"],
-    ], unitResult.ok ? "success" : "error");
+    const runSummary = summarizeUnitRunOutput(
+      unitResult.stdout,
+      unitResult.stderr,
+    );
+    summary(
+      "Kết quả thực thi",
+      [
+        [
+          "File test",
+          `${runSummary.passedFiles}/${runSummary.totalFiles} pass`,
+        ],
+        [
+          "Test case",
+          `${runSummary.passedTests}/${runSummary.totalTests} pass`,
+        ],
+        ["Thất bại", String(runSummary.failedTests)],
+        ["Coverage", unitResult.coverageEnabled ? "Đã bật" : "Chưa bật"],
+      ],
+      unitResult.ok ? "success" : "error",
+    );
     if (unitResult.ok) {
       success("Tất cả Unit Test đã pass.");
       if (gateReport) {
         testExecutionSummary({
-          specPassed: gateReport.counts.specRequirement + gateReport.counts.specTesterConfirmed,
-          specTotal: gateReport.counts.specRequirement + gateReport.counts.specTesterConfirmed,
+          specPassed:
+            gateReport.counts.specRequirement +
+            gateReport.counts.specTesterConfirmed,
+          specTotal:
+            gateReport.counts.specRequirement +
+            gateReport.counts.specTesterConfirmed,
           charPassed: gateReport.counts.characterization,
           charTotal: gateReport.counts.characterization,
           conflicts: gateReport.counts.sourceConflict,
@@ -1009,7 +1137,9 @@ async function runTests(level) {
       if (coverageLoop.status === "TARGET_REACHED") {
         success("Coverage đã đạt ngưỡng 80% cho các target được đo.");
       } else if (coverageLoop.rounds.length > 0) {
-        warning(`Coverage kết thúc ở trạng thái ${coverageLoop.status} sau ${coverageLoop.rounds.length} vòng.`);
+        warning(
+          `Coverage kết thúc ở trạng thái ${coverageLoop.status} sau ${coverageLoop.rounds.length} vòng.`,
+        );
       }
     } else {
       const errorMessage = `${unitResult.stdout}\n${unitResult.stderr}`.trim();
@@ -1020,10 +1150,15 @@ async function runTests(level) {
       if (runSummary.failedNames.length > 3) {
         detail("Còn lại", `${runSummary.failedNames.length - 3} test case`);
       }
-      if (runSummary.primaryError) detail("Nguyên nhân", runSummary.primaryError);
+      if (runSummary.primaryError)
+        detail("Nguyên nhân", runSummary.primaryError);
       artifact("Log đầy đủ", "test-results.json");
       await runHealer("unit", errorMessage);
-      const result = await harness.handleTestFailure("unit", "Generated Unit Suite", errorMessage);
+      const result = await harness.handleTestFailure(
+        "unit",
+        "Generated Unit Suite",
+        errorMessage,
+      );
       fs.mkdirSync("artifacts", { recursive: true });
       fs.writeFileSync("artifacts/report.md", result.report);
       success("Đã lưu báo cáo chẩn đoán.");
@@ -1205,30 +1340,45 @@ async function runCliEntrypoint() {
   if (isNonInteractive || level) {
     header();
     const targetLevel = level || "unit";
-    section("CLI", `CHẠY NON-INTERACTIVE PIPELINE [${targetLevel.toUpperCase()}]`, "Thực thi CI/CD tự động");
+    section(
+      "CLI",
+      `CHẠY NON-INTERACTIVE PIPELINE [${targetLevel.toUpperCase()}]`,
+      "Thực thi CI/CD tự động",
+    );
 
     try {
       if (targetLevel === "unit") {
         const gateReport = loadCurrentUnitOracleGateReport();
         oracleSummary(gateReport.counts);
         if (!gateReport.canRunInCi) {
-          uiError("Oracle Gate từ chối chạy CI: còn conflict hoặc expected chưa được xác minh.");
+          uiError(
+            "Oracle Gate từ chối chạy CI: còn conflict hoặc expected chưa được xác minh.",
+          );
           for (const reason of gateReport.blockingReasons.slice(0, 5)) {
             detail("Bị chặn", reason);
           }
           process.exit(1);
         }
         const unitResult = runLastGeneratedUnitTests();
-        const runSummary = summarizeUnitRunOutput(unitResult.stdout, unitResult.stderr);
+        const runSummary = summarizeUnitRunOutput(
+          unitResult.stdout,
+          unitResult.stderr,
+        );
 
         if (!unitResult.ok || runSummary.failedTests > 0) {
-          uiError(`Pipeline CI thất bại: Có ${runSummary.failedTests} test case bị lỗi.`);
+          uiError(
+            `Pipeline CI thất bại: Có ${runSummary.failedTests} test case bị lỗi.`,
+          );
           process.exit(1);
         } else {
           success("Tất cả Unit Test đã pass thành công trong CI.");
           testExecutionSummary({
-            specPassed: gateReport.counts.specRequirement + gateReport.counts.specTesterConfirmed,
-            specTotal: gateReport.counts.specRequirement + gateReport.counts.specTesterConfirmed,
+            specPassed:
+              gateReport.counts.specRequirement +
+              gateReport.counts.specTesterConfirmed,
+            specTotal:
+              gateReport.counts.specRequirement +
+              gateReport.counts.specTesterConfirmed,
             charPassed: gateReport.counts.characterization,
             charTotal: gateReport.counts.characterization,
             conflicts: gateReport.counts.sourceConflict,

@@ -21,6 +21,12 @@ export type FailureCategory =
   | 'NETWORK_ERROR'
   | 'ASSERTION_ERROR'
   | 'AUTHENTICATION_ERROR'
+  // API Integration specific
+  | 'API_ORACLE_MISMATCH'
+  | 'API_ENV_CONFIG'
+  | 'API_MOCK_CONFIG'
+  | 'API_REQUEST_FORMAT'
+  | 'API_DB_ASSERTION'
   | 'UNKNOWN';
 
 export interface HealerDiagnosis {
@@ -513,6 +519,145 @@ export function healSpecFile(
   return { ok: false, fixes: ['Không có pattern lỗi tự động nào phù hợp trong mã nguồn spec.'] };
 }
 
+// ─── API Integration Failure Classifier ─────────────────────────────────────
+
+/**
+ * classifyApiFailure — Phân loại lỗi đặc thù API Integration Test.
+ *
+ * Nguyên tắc cốt lõi:
+ * - API_ORACLE_MISMATCH: Kết quả khác expected từ SPECIFICATION oracle
+ *   → REPORT_ONLY, không bao giờ tự sửa Oracle.
+ * - Các lỗi kỹ thuật (config, mock, request format, DB): canSelfHeal = false
+ *   vì Healer không có đủ ngữ cảnh để sửa HTTP infrastructure.
+ */
+export function classifyApiFailure(errorLog: string): HealerDiagnosis {
+  const normalized = errorLog
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/đ/g, 'd');
+
+  // 1. Specification Oracle Mismatch — có khả năng là application bug
+  if (
+    /expected\s+\d+.*received\s+\d+|body path.*sai.*expected|status sai.*expected/i.test(normalized) &&
+    /specification.*requirement|oracle.*specification/i.test(normalized)
+  ) {
+    return {
+      category: 'API_ORACLE_MISMATCH',
+      reasonCode: 'SPECIFICATION_ORACLE_MISMATCH',
+      confidence: 'high',
+      canSelfHeal: false,
+      preservesExpectedResult: true,
+      recoveryAction: 'REPORT_ONLY',
+    };
+  }
+
+  // 2. DB Assertion fail — database state không khớp (check BEFORE generic assertion)
+  if (/db assertion|database.*expected|row count sai|cot.*khong ton tai/i.test(normalized)) {
+    return {
+      category: 'API_DB_ASSERTION',
+      reasonCode: 'DATABASE_STATE_DIFFERS_FROM_EXPECTED',
+      confidence: 'high',
+      canSelfHeal: false,
+      preservesExpectedResult: true,
+      recoveryAction: 'REPORT_ONLY',
+    };
+  }
+
+  // 3. Assertion fail chung (không rõ oracle) — có thể là logic sai hoặc schema thay đổi
+  if (/body path.*sai|status sai|header.*sai/i.test(normalized)) {
+    return {
+      category: 'ASSERTION_ERROR',
+      reasonCode: 'API_RESPONSE_DIFFERS_FROM_EXPECTED',
+      confidence: 'high',
+      canSelfHeal: false,
+      preservesExpectedResult: true,
+      recoveryAction: 'REPORT_ONLY',
+    };
+  }
+
+  // 4. Environment / Config — sai baseUrl, port, hoặc missing databaseUrl
+  if (/baseurl.*trong|api baseurl|databaseurl.*chua.*khai bao|khong the ket noi sqlite|driver.*chua.*cai/i.test(normalized)) {
+    return {
+      category: 'API_ENV_CONFIG',
+      reasonCode: 'API_ENVIRONMENT_MISCONFIGURED',
+      confidence: 'high',
+      canSelfHeal: false,
+      preservesExpectedResult: true,
+      recoveryAction: 'REPORT_ONLY',
+    };
+  }
+
+  // 5. Security block — host bị từ chối, không nằm trong allowlist
+  if (/api security|block.*production|external host.*chua.*cho phep|hostname.*khong.*allowlist/i.test(normalized)) {
+    return {
+      category: 'API_ENV_CONFIG',
+      reasonCode: 'API_HOST_BLOCKED_BY_SECURITY_POLICY',
+      confidence: 'high',
+      canSelfHeal: false,
+      preservesExpectedResult: true,
+      recoveryAction: 'REPORT_ONLY',
+    };
+  }
+
+  // 6. Mock / Fake HTTP config — unmocked endpoint, 501
+  if (/501.*unmocked|unmocked request|chua.*duoc khai bao stub|fake.*server/i.test(normalized)) {
+    return {
+      category: 'API_MOCK_CONFIG',
+      reasonCode: 'EXTERNAL_SERVICE_STUB_NOT_CONFIGURED',
+      confidence: 'high',
+      canSelfHeal: false,
+      preservesExpectedResult: true,
+      recoveryAction: 'REPORT_ONLY',
+    };
+  }
+
+  // 7. Request format — sai content-type, body parse error, invalid JSON
+  if (/content.type|json parse|invalid.*request|body.*khong hop le|request.*timeout/i.test(normalized)) {
+    return {
+      category: 'API_REQUEST_FORMAT',
+      reasonCode: 'API_REQUEST_MALFORMED_OR_TIMEOUT',
+      confidence: 'medium',
+      canSelfHeal: false,
+      preservesExpectedResult: true,
+      recoveryAction: 'REPORT_ONLY',
+    };
+  }
+
+  // 8. Network — connection refused, DNS, 5xx backend
+  if (/econnrefused|enotfound|network|fetch failed|response status 5\d\d|net::err/i.test(normalized)) {
+    return {
+      category: 'NETWORK_ERROR',
+      reasonCode: 'API_NETWORK_OR_BACKEND_UNAVAILABLE',
+      confidence: 'medium',
+      canSelfHeal: false,
+      preservesExpectedResult: true,
+      recoveryAction: 'REPORT_ONLY',
+    };
+  }
+
+  // 9. Authentication — 401
+  if (/status.*401|unauthorized|token.*het han|authentication.*error/i.test(normalized)) {
+    return {
+      category: 'AUTHENTICATION_ERROR',
+      reasonCode: 'API_AUTH_TOKEN_MISSING_OR_EXPIRED',
+      confidence: 'high',
+      canSelfHeal: false,
+      preservesExpectedResult: true,
+      recoveryAction: 'REPORT_ONLY',
+    };
+  }
+
+  return {
+    category: 'UNKNOWN',
+    reasonCode: 'API_NEEDS_MORE_EVIDENCE',
+    confidence: 'low',
+    canSelfHeal: false,
+    preservesExpectedResult: true,
+    recoveryAction: 'REPORT_ONLY',
+  };
+}
+
 export async function runHealer(
   level: "unit" | "integration" | "e2e",
   errorLog: string,
@@ -521,8 +666,7 @@ export async function runHealer(
   section('03', 'Healer Agent', 'Phân tích nguyên nhân gốc rễ & Tự động chữa lành mã kiểm thử');
 
   const diagnosis = level === 'unit' ? classifyUnitFailure(errorLog) : classifyFailure(errorLog);
-  if (!fs.existsSync('artifacts')) fs.mkdirSync('artifacts', { recursive: true });
-  
+  if (!fs.existsSync('artifacts')) fs.mkdirSync('artifacts');
   fs.writeFileSync(
     'artifacts/healer-diagnosis.json',
     JSON.stringify({

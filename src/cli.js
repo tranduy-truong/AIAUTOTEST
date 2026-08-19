@@ -121,7 +121,11 @@ async function mainMenu() {
           name: menuChoice("08", "Xem báo cáo", "Tổng hợp kết quả gần nhất"),
           value: "view_report",
         },
-        { name: menuChoice("09", "Thoát", "Đóng ứng dụng"), value: "exit" },
+        {
+          name: menuChoice("09", "Xóa Cache & Reset dữ liệu", "Xóa Guided Learning cache & artifacts"),
+          value: "clear_cache",
+        },
+        { name: menuChoice("10", "Thoát", "Đóng ứng dụng"), value: "exit" },
       ],
     },
   ]);
@@ -151,6 +155,9 @@ async function mainMenu() {
       break;
     case "view_report":
       showReport();
+      break;
+    case "clear_cache":
+      await handleClearCache();
       break;
     case "exit":
       process.exit(0);
@@ -189,6 +196,31 @@ async function handleApiIntegrationFlow() {
   } else if (mode === "sandbox") {
     await runTests("integration");
   }
+}
+
+async function handleClearCache() {
+  console.log("\n🧹 [Dọn dẹp Cache] Đang xóa toàn bộ Guided Learning cache và dữ liệu tạm...");
+  const pathsToClean = [
+    ".testkit",
+    "test-results",
+    "artifacts/action-plan.json",
+    "artifacts/crawled-dom.md",
+    "artifacts/discovery-dom.md",
+    "artifacts/locator-registry.json",
+  ];
+
+  let cleanedCount = 0;
+  for (const p of pathsToClean) {
+    if (fs.existsSync(p)) {
+      try {
+        fs.rmSync(p, { recursive: true, force: true });
+        cleanedCount++;
+      } catch {}
+    }
+  }
+
+  console.log(`✅ Đã xóa sạch ${cleanedCount} mục cache thành công! Lần quét tiếp theo sẽ khám phá DOM mới hoàn toàn.`);
+  await returnToMenu();
 }
 
 // 2. TÍNH NĂNG: SINH CODE TEST TRỰC TIẾP TỪ KẾ HOẠCH CÓ SẴN (TEST PLAN)
@@ -351,22 +383,22 @@ async function handlePlanAndGenerate(forcedLevel) {
         }]);
 
         if (needsAuth) {
-          let suggestedLoginUrl = '';
+          let suggestedLoginUrl = seedUrls[0] || '';
           try {
-            const seedOrigin = new URL(seedUrls[0]).origin;
-            const seedPath = new URL(seedUrls[0]).pathname;
-            const pathParts = seedPath.split('/').filter(Boolean);
-            if (pathParts.length >= 1) {
-              suggestedLoginUrl = seedOrigin + '/' + pathParts[0] + '/dang-nhap';
+            const parsedSeed = new URL(seedUrls[0]);
+            if (parsedSeed.pathname === '/' || parsedSeed.pathname === '') {
+              suggestedLoginUrl = seedUrls[0];
+            } else if (/(login|dang-nhap|signin)/i.test(parsedSeed.pathname)) {
+              suggestedLoginUrl = seedUrls[0];
             } else {
-              suggestedLoginUrl = seedOrigin + '/login';
+              suggestedLoginUrl = parsedSeed.origin + '/login';
             }
           } catch {}
 
           const authAnswers = await inquirer.prompt([
             { type: 'input', name: 'loginUrl', message: 'URL trang đăng nhập:', default: suggestedLoginUrl, validate: v => v.trim() ? true : 'Bắt buộc nhập URL.' },
-            { type: 'input', name: 'username', message: 'Username / Email:', default: 'admin' },
-            { type: 'password', name: 'password', message: 'Password:', default: '123123', mask: '*' },
+            { type: 'input', name: 'username', message: 'Username / Email:', default: 'standard_user' },
+            { type: 'password', name: 'password', message: 'Password:', default: 'secret_sauce', mask: '*' },
           ]);
 
           discoveryAuthInfo = {
@@ -397,12 +429,16 @@ async function handlePlanAndGenerate(forcedLevel) {
       const { runDiscoveryCrawler, buildDiscoveryReport } = await import("./agents/crawler/discovery-crawler.js");
       let discoveryResult;
       try {
-        discoveryResult = await runDiscoveryCrawler(seedUrls, authSession ?? createNoAuthSession(), {
-          maxPages: 10,
-          maxDepth: 2,
-          headless: true,
-        });
-
+        discoveryResult = await runDiscoveryCrawler(
+          seedUrls,
+          authSession ?? createNoAuthSession(),
+          {
+            maxPages: 15,
+            maxDepth: 3,
+            headless: true,
+          },
+          discoveryAuthInfo ?? undefined,
+        );
       } catch (err) {
         console.error(`   ❌ Discovery Crawler thất bại: ${err.message}`);
         await returnToMenu();
@@ -547,10 +583,14 @@ Vi du:
           }]);
 
           if (needsAuth) {
+            const detectedLoginUrl = parsedCases
+              .flatMap(tc => tc.steps)
+              .find(s => s.type === 'goto' && /(?:login|signin|sign-in|dang-nhap)/i.test(s.url || ''))?.url || '';
+
             const authAnswers = await inquirer.prompt([
-              { type: 'input', name: 'loginUrl', message: 'URL trang đăng nhập:', default: 'https://hcm.mobifone.vn/qly-dttg/dang-nhap', validate: v => v.trim() ? true : 'Bắt buộc nhập URL.' },
-              { type: 'input', name: 'username', message: 'Username / Email:', default: 'admin' },
-              { type: 'password', name: 'password', message: 'Password:', default: '123123', mask: '*' },
+              { type: 'input', name: 'loginUrl', message: 'URL trang đăng nhập:', default: detectedLoginUrl || 'https://www.saucedemo.com/', validate: v => v.trim() ? true : 'Bắt buộc nhập URL.' },
+              { type: 'input', name: 'username', message: 'Username / Email:', default: 'standard_user' },
+              { type: 'password', name: 'password', message: 'Password:', default: 'secret_sauce', mask: '*' },
             ]);
             console.log('[Auth] Đang mở trình duyệt để xác thực...');
             authSession = await captureAuthSession({ strategy: 'PLAYWRIGHT_STORAGE_STATE', ...authAnswers });
@@ -1193,27 +1233,91 @@ async function runTests(level) {
   }
 
   // E2E Level Runner
-  let command = "npx playwright test tests/e2e";
+  let targetSpec = "tests/e2e";
+  const e2eDir = "tests/e2e";
+  if (fs.existsSync(e2eDir)) {
+    const specFiles = fs.readdirSync(e2eDir).filter(f => f.endsWith('.spec.ts'));
+    if (specFiles.length > 0 && !process.argv.includes('--non-interactive')) {
+      const { selectedSpec } = await inquirer.prompt([
+        {
+          type: "list",
+          name: "selectedSpec",
+          message: "Chọn phạm vi chạy E2E:",
+          choices: [
+            { name: "⚡ Chạy tất cả các bộ test E2E (tests/e2e)", value: "tests/e2e" },
+            new inquirer.Separator(),
+            ...specFiles.map(f => ({ name: `📄 ${f}`, value: path.join("tests", "e2e", f).replace(/\\/g, "/") }))
+          ]
+        }
+      ]);
+      targetSpec = selectedSpec;
+    }
+  }
 
-  try {
-    const output = execSync(command, { encoding: "utf-8" });
-    console.log(output);
-    success(`Tất cả test ${level.toUpperCase()} đã pass.`);
-  } catch (error) {
-    uiError(`Test ${level.toUpperCase()} chưa pass.`);
-    detail("Tiếp theo", "Đang chạy chẩn đoán và tạo báo cáo.");
+  let command = `npx playwright test "${targetSpec}"`;
+  const maxAttempts = 3;
+  let attempt = 1;
+  let allPassed = false;
 
-    const errorMessage = error.stdout || error.message;
-    await runHealer(level, String(errorMessage));
-    const result = await harness.handleTestFailure(
-      level,
-      `Suite [${level}]`,
-      errorMessage,
-    );
+  while (attempt <= maxAttempts && !allPassed) {
+    if (attempt > 1) {
+      section("HEAL", `Vòng tự sửa lỗi (Attempt ${attempt}/${maxAttempts})`, "Healer đang chữa lành và chạy lại bài test");
+    }
 
-    if (!fs.existsSync("artifacts")) fs.mkdirSync("artifacts");
+    try {
+      const output = execSync(command, { encoding: "utf-8" });
+      console.log(output);
+      success(`Tất cả test ${level.toUpperCase()} đã pass${attempt > 1 ? ` sau khi Healer tự động sửa (Vòng ${attempt})` : ''}.`);
+      allPassed = true;
+    } catch (error) {
+      const errorMessage = error.stdout || error.message;
+      uiError(`Test ${level.toUpperCase()} gặp lỗi ở vòng ${attempt}/${maxAttempts}.`);
 
-    const reportContent = `
+      if (attempt < maxAttempts) {
+        detail("Healer", "Đang phân tích lỗi và tự động vá mã nguồn...");
+        const { healSpecFile } = await import("./agents/healer/run.js");
+        
+        // Tìm các file spec bị lỗi từ log
+        const matchedSpecs = String(errorMessage).match(/tests[\\/]e2e[\\/][a-zA-Z0-9_\-\.]+\.spec\.ts/g) || [];
+        const uniqueSpecs = [...new Set(matchedSpecs.map(p => p.replace(/\\/g, '/')))];
+
+        let anyHealed = false;
+        if (uniqueSpecs.length > 0) {
+          for (const specPath of uniqueSpecs) {
+            if (fs.existsSync(specPath)) {
+              const healRes = healSpecFile(specPath, errorMessage);
+              if (healRes.ok) {
+                anyHealed = true;
+                healRes.fixes.forEach(fix => detail("Đã vá", `${path.basename(specPath)}: ${fix}`));
+              }
+            }
+          }
+        } else if (targetSpec.endsWith('.spec.ts') && fs.existsSync(targetSpec)) {
+          const healRes = healSpecFile(targetSpec, errorMessage);
+          if (healRes.ok) {
+            anyHealed = true;
+            healRes.fixes.forEach(fix => detail("Đã vá", `${path.basename(targetSpec)}: ${fix}`));
+          }
+        }
+
+        if (anyHealed) {
+          success("Healer đã áp dụng các bản vá tự động. Đang chạy lại kiểm thử...");
+          attempt++;
+          continue;
+        }
+      }
+
+      detail("Tiếp theo", "Đang chạy chẩn đoán và tạo báo cáo.");
+      await runHealer(level, String(errorMessage));
+      const result = await harness.handleTestFailure(
+        level,
+        `Suite [${level}]`,
+        errorMessage,
+      );
+
+      if (!fs.existsSync("artifacts")) fs.mkdirSync("artifacts");
+
+      const reportContent = `
 # BÁO CÁO PHÂN TÍCH LỖI TỰ ĐỘNG - ${new Date().toLocaleString()}
 
 - **Cấp độ test**: ${level.toUpperCase()}
@@ -1233,11 +1337,13 @@ ${result.rawErrorLog || errorMessage}
 ## Phân tích & Đề xuất sửa lỗi từ AI:
 
 ${result.report}
-    `;
+      `;
 
-    fs.writeFileSync("artifacts/report.md", reportContent);
-    success("Đã tạo báo cáo chẩn đoán.");
-    artifact("Báo cáo", "artifacts/report.md");
+      fs.writeFileSync("artifacts/report.md", reportContent);
+      success("Đã tạo báo cáo chẩn đoán.");
+      artifact("Báo cáo", "artifacts/report.md");
+      break;
+    }
   }
 
   await returnToMenu();

@@ -128,7 +128,16 @@ export function rememberLearnedLocator(
     context?: string;
     selector: string;
   },
-): LearnedLocatorEntry {
+): LearnedLocatorEntry | undefined {
+  // KHÔNG BAO GIỜ lưu các selector div/button/span vào cache cho thao tác 'fill' (nhập liệu)
+  if (input.stepType === 'fill') {
+    const isInvalidFillSelector = /^(div|span|button|header|main|ul|li|section|article|aside|nav):/i.test(input.selector) ||
+      /\b(button|span|div)\b/i.test(input.selector) && !/input|textarea|select|contenteditable/i.test(input.selector);
+    if (isInvalidFillSelector) {
+      return undefined;
+    }
+  }
+
   const now = new Date().toISOString();
   const existing = findLearnedLocator(
     registry,
@@ -162,4 +171,15 @@ export function forgetLearnedLocator(
   entry: LearnedLocatorEntry,
 ): void {
   registry.entries = registry.entries.filter(candidate => candidate !== entry);
+}
+
+/**
+ * Xóa sạch toàn bộ Guided Learning Cache
+ */
+export function clearLocatorRegistry(filePath = defaultLocatorRegistryPath()): void {
+  saveLocatorRegistry({ version: 1, entries: [] }, filePath);
+  const legacyPath = legacyLocatorRegistryPath();
+  if (fs.existsSync(legacyPath)) {
+    try { fs.unlinkSync(legacyPath); } catch {}
+  }
 }

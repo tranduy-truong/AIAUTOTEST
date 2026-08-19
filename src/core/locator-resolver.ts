@@ -57,13 +57,38 @@ function normalizeText(text: string): string {
     .trim();
 }
 
+const SEMANTIC_SYNONYM_GROUPS: string[][] = [
+  ['username', 'user name', 'user', 'user-name', 'email', 'account', 'login', 'login-id', 'userid', 'ten dang nhap', 'tai khoan', 'ten nguoi dung', 'nguoi dung'],
+  ['password', 'pass', 'pwd', 'passcode', 'pin', 'mat khau'],
+  ['login', 'log in', 'sign in', 'signin', 'submit', 'dang nhap', 'login-button', 'btn-login'],
+  ['search', 'find', 'lookup', 'filter', 'query', 'keyword', 'tim kiem', 'tra cuu', 'loc'],
+  ['add to cart', 'add to basket', 'buy now', 'add-to-cart', 'them vao gio', 'them vao gio hang', 'mua ngay', 'chon mua'],
+  ['shopping cart', 'shopping-cart', 'shopping_cart', 'cart', 'basket', 'bag', 'gio hang', 'xem gio hang', 'shopping-cart-link'],
+  ['checkout', 'continue', 'finish', 'order', 'place order', 'thanh toan', 'dat hang', 'tiep tuc', 'hoan tat'],
+  ['close', 'cancel', 'dismiss', 'back', 'exit', 'dong', 'huy', 'bo qua', 'thoat', 'quay lai'],
+  ['next', 'trang sau', 'sau', 'ke tiep', '>'],
+  ['prev', 'previous', 'trang truoc', 'truoc', '<'],
+];
+
+function semanticMatch(candidateNorm: string, targetNorm: string): boolean {
+  if (!candidateNorm || !targetNorm) return false;
+  for (const group of SEMANTIC_SYNONYM_GROUPS) {
+    const candidateInGroup = group.some(term => candidateNorm === term || candidateNorm.includes(term));
+    const targetInGroup = group.some(term => targetNorm === term || targetNorm.includes(term));
+    if (candidateInGroup && targetInGroup) return true;
+  }
+  return false;
+}
+
 function textMatches(candidate: string | undefined, target: string): boolean {
   const normalizedCandidate = normalizeText(candidate || '');
-  return Boolean(
-    normalizedCandidate &&
-    target &&
-    (normalizedCandidate.includes(target) || target.includes(normalizedCandidate))
-  );
+  const normalizedTarget = normalizeText(target || '');
+  if (!normalizedCandidate || !normalizedTarget) return false;
+  
+  if (normalizedCandidate.includes(normalizedTarget) || normalizedTarget.includes(normalizedCandidate)) {
+    return true;
+  }
+  return semanticMatch(normalizedCandidate, normalizedTarget);
 }
 
 const CONTEXT_WORDS = new Set([
@@ -269,6 +294,8 @@ function findIconElement(target: string, elements: ElementInfo[]): ElementInfo |
  * @param stepType Loại hành động (fill, click, select, check)
  * @param stepTarget Mô tả phần tử đích
  * @param dom Snapshot DOM để đối chiếu
+ * @param stepContext Ngữ cảnh bổ sung
+ * @param ariaRole ARIA role cụ thể từ Planner / Crawler (tab, button, link, sidebar, menuitem, textbox, combobox)
  * @returns Thông tin locator và độ tin cậy
  */
 export function resolveLocator(
@@ -276,9 +303,11 @@ export function resolveLocator(
   stepTarget: string,
   dom?: DomSnapshot,
   stepContext?: string,
+  ariaRole?: string,
 ): ResolvedLocator {
   const target = normalizeText(stepTarget);
   const context = normalizeText(stepContext || '');
+  const explicitRole = ariaRole ? normalizeText(ariaRole) : '';
   const elements = dom?.elements || [];
 
   const guidedBinding = elements.find(element =>
@@ -311,26 +340,30 @@ export function resolveLocator(
 
   // 1. Xử lý bước 'fill' (nhập liệu)
   if (stepType === 'fill') {
-    // a. Tìm theo placeholder (độ tin cậy cao)
-    const byPlaceholder = uniqueVisibleMatch(candidateElements, el => textMatches(el.placeholder, target));
+    // a. Tìm theo placeholder trên ô input/textarea thực sự (độ tin cậy cao)
+    const byPlaceholder = uniqueVisibleMatch(candidateElements, el =>
+      (el.tag === 'input' || el.tag === 'textarea') && textMatches(el.placeholder, target),
+    );
     if (byPlaceholder && byPlaceholder.placeholder) {
+      const safePl = escapeSingleQuoted(byPlaceholder.placeholder);
       return {
-        locator: `page.getByPlaceholder('${byPlaceholder.placeholder}')`,
+        locator: `page.getByPlaceholder('${safePl}').or(page.getByLabel('${safePl}')).first()`,
         confidence: 'high',
         matchedBy: 'placeholder',
         element: byPlaceholder
       };
     }
 
-    // b. Tìm theo ariaLabel (độ tin cậy cao)
+    // b. Tìm theo ariaLabel trên input/textarea (độ tin cậy cao)
     const byAriaLabel = uniqueVisibleMatch(candidateElements, el =>
       (el.tag === 'input' || el.tag === 'textarea') &&
       (textMatches(el.ariaLabel, target) || textMatches(el.labelText, target)),
     );
     if (byAriaLabel) {
       if (byAriaLabel.ariaLabel) {
+        const safeLbl = escapeSingleQuoted(byAriaLabel.ariaLabel);
         return {
-          locator: `page.getByLabel('${escapeSingleQuoted(byAriaLabel.ariaLabel)}')`,
+          locator: `page.getByPlaceholder('${safeLbl}').or(page.getByLabel('${safeLbl}')).first()`,
           confidence: 'high',
           matchedBy: 'ariaLabel',
           element: byAriaLabel
@@ -346,33 +379,41 @@ export function resolveLocator(
       }
     }
 
-    // c. Tìm theo name (độ tin cậy trung bình)
-    const byName = uniqueVisibleMatch(candidateElements, el => textMatches(el.name, target));
+    // c. Tìm theo name trên input/textarea (độ tin cậy trung bình)
+    const byName = uniqueVisibleMatch(candidateElements, el =>
+      (el.tag === 'input' || el.tag === 'textarea') && textMatches(el.name, target),
+    );
     if (byName && byName.name) {
+      const safeN = escapeSingleQuoted(byName.name);
       return {
-        locator: `page.locator('[name="${byName.name}"]')`,
+        locator: `page.locator('[name="${safeN}"]').or(page.getByPlaceholder('${safeN}')).or(page.getByLabel('${safeN}')).first()`,
         confidence: 'medium',
         matchedBy: 'name',
         element: byName
       };
     }
 
-    // d. Tìm theo id (độ tin cậy trung bình)
-    const byId = uniqueVisibleMatch(candidateElements, el => textMatches(el.id, target));
+    // d. Tìm theo id trên input/textarea (chỉ lấy khi thực sự là input, bỏ qua React button trigger IDs)
+    const byId = uniqueVisibleMatch(candidateElements, el =>
+      (el.tag === 'input' || el.tag === 'textarea') &&
+      !el.id?.startsWith('base-ui-') &&
+      textMatches(el.id, target),
+    );
     if (byId && byId.id) {
+      const safeId = escapeSingleQuoted(byId.id);
       return {
-        locator: `page.locator('#${byId.id}')`,
+        locator: `page.locator('#${safeId}').or(page.getByPlaceholder('${safeId}')).or(page.getByLabel('${safeId}')).first()`,
         confidence: 'medium',
         matchedBy: 'id',
         element: byId
       };
     }
 
-    // e. Fallback nhập liệu (dùng getByPlaceholder kết hợp getByLabel và first)
+    // e. Fallback nhập liệu: ưu tiên ô input text trên trang với chuỗi .or() đa tầng
     const cleanTarget = stepTarget.replace(/^['"]|['"]$/g, '').replace(/'/g, "\\'");
     return {
-      locator: `page.getByPlaceholder('${cleanTarget}').or(page.getByLabel('${cleanTarget}')).first()`,
-      confidence: 'low',
+      locator: `page.getByPlaceholder('${cleanTarget}').or(page.getByLabel('${cleanTarget}')).or(page.locator('input[type="text"], input[type="search"], textarea')).first()`,
+      confidence: 'medium',
       matchedBy: 'fallback_placeholder'
     };
   }
@@ -381,23 +422,124 @@ export function resolveLocator(
   if (stepType === 'click') {
     const cleanTarget = stepTarget.replace(/^['"]|['"]$/g, '').replace(/'/g, "\\'");
     
-    // a. Tìm button hoặc link có text trùng khớp (độ tin cậy cao)
-    const isButtonOrLink = (el: ElementInfo) => el.tag === 'button' || el.tag === 'a' || el.role === 'button' || el.role === 'link';
+    // a. Ưu tiên xử lý theo ariaRole cụ thể do Planner / Crawler chỉ định
+    if (explicitRole === 'sidebar' || context?.toLowerCase().includes('sidebar')) {
+      return {
+        locator: `page.getByRole('link', { name: '${cleanTarget}' }).or(page.getByRole('button', { name: '${cleanTarget}' })).or(page.locator('aside, nav, ul, [role="navigation"]').getByText('${cleanTarget}')).first()`,
+        confidence: 'high',
+        matchedBy: 'explicit_aria_role_sidebar'
+      };
+    }
+    // Hỗ trợ nút Phân trang: Trang sau (>) / Trang trước (<)
+    if (/^(>|next|trang sau|sau)$/i.test(cleanTarget.trim())) {
+      return {
+        locator: `page.getByRole('button', { name: '>' }).or(page.locator('button:has-text(">"), [aria-label*="next" i], [title*="next" i], [data-slot*="next"]')).first()`,
+        confidence: 'high',
+        matchedBy: 'pagination_next'
+      };
+    }
+    if (/^(<|prev|previous|trang truoc|trang trước|trước)$/i.test(cleanTarget.trim())) {
+      return {
+        locator: `page.getByRole('button', { name: '<' }).or(page.locator('button:has-text("<"), [aria-label*="prev" i], [title*="prev" i], [data-slot*="prev"]')).first()`,
+        confidence: 'high',
+        matchedBy: 'pagination_prev'
+      };
+    }
+    // Hỗ trợ chọn số dòng/trang (Page Size)
+    if (/số dòng\/trang|so dong\/trang|rows per page|page size|số dòng/i.test(cleanTarget.trim())) {
+      return {
+        locator: `page.getByRole('combobox').or(page.locator('[data-slot="select-trigger"], select, [aria-haspopup="listbox"]')).first()`,
+        confidence: 'high',
+        matchedBy: 'page_size_trigger'
+      };
+    }
+    // Hỗ trợ thao tác trên từng dòng / item / card theo Context
+    if (context && context.trim().length > 1) {
+      const cleanContext = context.trim().replace(/^['"]|['"]$/g, '').replace(/(?:dong|san pham|item|row|record|cua|tren)\s*/gi, '').trim();
+      if (cleanContext) {
+        return {
+          locator: `page.locator('.inventory_item, [class*="card"], [class*="product"], tr, [role="row"], article, li').filter({ hasText: '${escapeSingleQuoted(cleanContext)}' }).getByRole('button', { name: '${cleanTarget}' }).or(page.locator('.inventory_item, [class*="card"], [class*="product"], tr, [role="row"], article, li').filter({ hasText: '${escapeSingleQuoted(cleanContext)}' }).locator('button, a, svg, [data-test*="cart"], [data-test*="add"], [data-test*="view"], [data-test*="${cleanTarget.toLowerCase().replace(/\\s+/g, '-')}"]')).or(page.locator('[data-test*="${cleanContext.toLowerCase().replace(/[^a-z0-9]+/g, '-')}"] [data-test*="add"], [data-test="add-to-cart-${cleanContext.toLowerCase().replace(/[^a-z0-9]+/g, '-')}"]')).first()`,
+          confidence: 'high',
+          matchedBy: 'container_action_context'
+        };
+      }
+    }
+    if (explicitRole === 'tab') {
+      return {
+        locator: `page.getByRole('tab', { name: '${cleanTarget}' }).or(page.getByRole('button', { name: '${cleanTarget}' })).or(page.getByRole('link', { name: '${cleanTarget}' })).first()`,
+        confidence: 'high',
+        matchedBy: 'explicit_aria_role_tab'
+      };
+    }
+    if (explicitRole === 'button') {
+      return {
+        locator: `page.getByRole('button', { name: '${cleanTarget}' }).or(page.getByRole('tab', { name: '${cleanTarget}' })).or(page.getByRole('link', { name: '${cleanTarget}' })).or(page.locator('input[type="submit"][value="${cleanTarget}"], [data-test*="${cleanTarget}" i], #${cleanTarget}')).first()`,
+        confidence: 'high',
+        matchedBy: 'explicit_aria_role_button'
+      };
+    }
+    if (explicitRole === 'link') {
+      return {
+        locator: `page.locator('[data-test="${cleanTarget}"], [data-testid="${cleanTarget}"], [data-test*="${cleanTarget}" i], [data-testid*="${cleanTarget}" i], a.${cleanTarget.replace(/-/g, '_')}, a.${cleanTarget}, a#${cleanTarget}').or(page.getByRole('link', { name: '${cleanTarget}' })).or(page.getByRole('button', { name: '${cleanTarget}' })).first()`,
+        confidence: 'high',
+        matchedBy: 'explicit_aria_role_link'
+      };
+    }
+    if (explicitRole === 'menuitem') {
+      return {
+        locator: `page.getByRole('menuitem', { name: '${cleanTarget}' }).or(page.getByRole('button', { name: '${cleanTarget}' })).first()`,
+        confidence: 'high',
+        matchedBy: 'explicit_aria_role_menuitem'
+      };
+    }
+
+    // b. Tìm button, link hoặc input submit có text/value/id/testId trùng khớp trong snapshot DOM (độ tin cậy cao)
+    const isButtonOrLink = (el: ElementInfo) =>
+      el.tag === 'button' ||
+      el.tag === 'a' ||
+      el.role === 'button' ||
+      el.role === 'link' ||
+      el.role === 'tab' ||
+      el.role === 'menuitem' ||
+      (el.tag === 'input' && /^(submit|button|reset|image)$/i.test(el.type || ''));
+
     const byText = uniqueVisibleMatch(candidateElements, el =>
       isButtonOrLink(el) && (
         textMatches(el.text, target) ||
         textMatches(el.accessibleName, target) ||
-        textMatches(el.ariaLabel, target)
+        textMatches(el.ariaLabel, target) ||
+        textMatches(el.title, target) ||
+        textMatches(el.dataValue, target) ||
+        textMatches(el.id, target) ||
+        textMatches(el.testId, target) ||
+        textMatches(el.name, target)
       ),
     );
     
-    if (byText && byText.text) {
-      const role = (byText.tag === 'a' || byText.role === 'link') ? 'link' : 'button';
-      const safeName = escapeSingleQuoted((byText.accessibleName || byText.text).trim());
+    if (byText) {
+      const safeName = escapeSingleQuoted((byText.accessibleName || byText.text || byText.dataValue || cleanTarget).trim());
+      if (byText.testId) {
+        const safeTestId = escapeSingleQuoted(byText.testId);
+        return {
+          locator: `page.locator('[data-test="${safeTestId}"], [data-testid="${safeTestId}"]').or(page.getByRole('button', { name: '${safeName}' })).or(page.getByRole('link', { name: '${safeName}' })).first()`,
+          confidence: 'high',
+          matchedBy: 'testId',
+          element: byText
+        };
+      }
+      if (byText.tag === 'input' && byText.type === 'submit') {
+        const safeId = byText.id ? escapeSingleQuoted(byText.id) : '';
+        return {
+          locator: `page.locator('input[type="submit"][value="${safeName}"], #${safeId || 'login-button'}, [data-test="${safeId || 'login-button'}"]').or(page.getByRole('button', { name: '${safeName}' })).first()`,
+          confidence: 'high',
+          matchedBy: 'input_submit',
+          element: byText
+        };
+      }
       return {
-        locator: `page.getByRole('${role}', { name: '${safeName}', exact: true })`,
+        locator: `page.getByRole('tab', { name: '${safeName}' }).or(page.getByRole('button', { name: '${safeName}' })).or(page.getByRole('link', { name: '${safeName}' })).first()`,
         confidence: 'high',
-        matchedBy: 'role+name',
+        matchedBy: 'role+name+fallback',
         element: byText
       };
     }
@@ -414,56 +556,57 @@ export function resolveLocator(
       ),
     );
     if (byVerifiedInteractiveText?.selector) {
+      const safeText = escapeSingleQuoted((byVerifiedInteractiveText.text || cleanTarget).trim());
       return {
-        locator: `page.locator('${escapeSingleQuoted(byVerifiedInteractiveText.selector)}')`,
+        locator: `page.locator('${escapeSingleQuoted(byVerifiedInteractiveText.selector)}').or(page.getByRole('button', { name: '${safeText}' })).or(page.getByRole('tab', { name: '${safeText}' })).first()`,
         confidence: 'high',
         matchedBy: 'verified_interactive_text',
         element: byVerifiedInteractiveText,
       };
     }
 
-    // b. Icon chỉ được resolve khi snapshot DOM cung cấp bằng chứng thực tế.
+    // c. Icon chỉ được resolve khi snapshot DOM cung cấp bằng chứng thực tế.
     const iconElement = findIconElement(target, candidateElements);
     if (iconElement?.selector) {
       const safeSelector = iconElement.selector.replace(/'/g, "\\'");
       const hasAccessibleEvidence = Boolean(iconElement.ariaLabel || iconElement.accessibleName || iconElement.testId);
       return {
-        locator: `page.locator('${safeSelector}')`,
+        locator: `page.locator('${safeSelector}').or(page.getByRole('button', { name: '${cleanTarget}' })).or(page.getByRole('link', { name: '${cleanTarget}' })).first()`,
         confidence: hasAccessibleEvidence ? 'high' : 'medium',
         matchedBy: 'dom_icon_metadata',
         element: iconElement
       };
     }
 
-    // c. Tìm theo ariaLabel (độ tin cậy trung bình)
+    // d. Tìm theo ariaLabel (độ tin cậy trung bình)
     const byAriaLabel = uniqueVisibleMatch(candidateElements, el => textMatches(el.ariaLabel, target));
     if (byAriaLabel && byAriaLabel.ariaLabel) {
       const safeLabel = byAriaLabel.ariaLabel.replace(/'/g, "\\'");
       return {
-        locator: `page.getByLabel('${safeLabel}')`,
+        locator: `page.getByRole('tab', { name: '${safeLabel}' }).or(page.getByRole('button', { name: '${safeLabel}' })).or(page.getByRole('link', { name: '${safeLabel}' })).first()`,
         confidence: 'medium',
         matchedBy: 'ariaLabel',
         element: byAriaLabel
       };
     }
 
-    // d. Tìm link có text (độ tin cậy trung bình)
+    // e. Tìm link có text (độ tin cậy trung bình)
     const linkByText = candidateElements.find(el => (el.tag === 'a' || el.role === 'link') && el.text && normalizeText(el.text).includes(target));
     if (linkByText && linkByText.text) {
       const safeName = linkByText.text.trim().replace(/'/g, "\\'");
       return {
-        locator: `page.getByRole('link', { name: '${safeName}', exact: true })`,
+        locator: `page.getByRole('link', { name: '${safeName}' }).or(page.getByRole('button', { name: '${safeName}' })).first()`,
         confidence: 'medium',
         matchedBy: 'link_name',
         element: linkByText
       };
     }
 
-    // e. Fallback an toàn (Ưu tiên getByRole button -> fallback getByText với .first() tránh strict mode)
+    // f. Fallback an toàn (Chỉ dùng interactive roles: tab, button, link - KHÔNG dùng getByText)
     return {
-      locator: `page.getByRole('button', { name: '${cleanTarget}' }).or(page.getByText('${cleanTarget}')).first()`,
+      locator: `page.getByRole('tab', { name: '${cleanTarget}' }).or(page.getByRole('button', { name: '${cleanTarget}' })).or(page.getByRole('link', { name: '${cleanTarget}' })).first()`,
       confidence: 'low',
-      matchedBy: 'fallback_role_button'
+      matchedBy: 'fallback_interactive_roles'
     };
   }
 
@@ -565,7 +708,7 @@ export function resolveLocator(
       const textToFind = match ? match[1] : originalTarget;
       const safeText = textToFind.replace(/'/g, "\\'");
       return {
-        locator: `await expect(page.getByText('${safeText}')).toBeVisible();`,
+        locator: `await expect(page.getByText('${safeText}').first()).toBeVisible();`,
         confidence: 'high',
         matchedBy: 'assert_text_visible'
       };
@@ -576,7 +719,7 @@ export function resolveLocator(
       target.includes('mat khau bi an')
     ) {
       return {
-        locator: `await expect(page.getByPlaceholder('Nhập mật khẩu')).toHaveAttribute('type', 'password');`,
+        locator: `await expect(page.getByPlaceholder('Nhập mật khẩu').or(page.getByLabel('Nhập mật khẩu')).first()).toHaveAttribute('type', 'password');`,
         confidence: 'high',
         matchedBy: 'assert_password_hidden'
       };
@@ -587,7 +730,7 @@ export function resolveLocator(
       (target.includes('mat khau') && target.includes('doc duoc'))
     ) {
       return {
-        locator: `await expect(page.getByPlaceholder('Nhập mật khẩu')).toHaveAttribute('type', 'text');`,
+        locator: `await expect(page.getByPlaceholder('Nhập mật khẩu').or(page.getByLabel('Nhập mật khẩu')).first()).toHaveAttribute('type', 'text');`,
         confidence: 'high',
         matchedBy: 'assert_password_visible'
       };
@@ -595,16 +738,17 @@ export function resolveLocator(
     
     // Fallback assert
     return {
-      locator: `await expect(page.locator('body')).toContainText('${safeOriginal}');`,
+      locator: `await expect(page.getByText('${safeOriginal}').first()).toBeVisible();`,
       confidence: 'low',
       matchedBy: 'fallback_assert'
     };
   }
 
-  // Mặc định trả về theo text nếu không xác định được loại
+  // Mặc định trả về theo role tab/button/link kết hợp .first() nếu không xác định được loại (KHÔNG dùng getByText)
+  const safeTarget = stepTarget.replace(/^['"]|['"]$/g, '').replace(/'/g, "\\'");
   return {
-    locator: `page.getByText('${stepTarget.replace(/^['"]|['"]$/g, '')}')`,
+    locator: `page.getByRole('tab', { name: '${safeTarget}' }).or(page.getByRole('button', { name: '${safeTarget}' })).or(page.getByRole('link', { name: '${safeTarget}' })).first()`,
     confidence: 'low',
-    matchedBy: 'unknown_step_type'
+    matchedBy: 'default_role_fallback'
   };
 }

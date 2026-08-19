@@ -14,8 +14,8 @@ Khi đầu vào có `HỢP ĐỒNG ĐÃ HỢP NHẤT TỪ PLANNER VÀ CRAWLER`, 
 - Không sinh `.nth()`, XPath, CSS suy đoán, `waitForTimeout()` hoặc assertion trên `body`.
 - Đối với ô nhập liệu (Form Input/Password): TUYỆT ĐỐI KHÔNG dùng `getByText()` cho nội dung bên trong `<input>`. Bắt buộc kiểm tra bằng `toHaveAttribute('type', 'text'|'password')` và `toHaveValue('...')`.
 - Đối với kiểm tra hiển thị văn bản (Text Assertions): Luôn dùng `page.getByText(/.../i).first()` hoặc `page.getByText('...').first()` (bỏ exact: true cho chuỗi dữ liệu dài) để tránh lỗi `Strict mode violation` và không bị fail vì số thứ tự/khoảng trắng thừa trong DB.
-- Đối với mọi thao tác Click (`page.getByRole`, `page.getByText`): BẮT BUỘC gắn chuỗi Fallback `.or(...)` và `.first()` phía sau để phòng ngừa sai lệch role giữa Tab/Button/Link:
-  `await page.getByRole('tab', { name: /.../i }).or(page.getByRole('button', { name: /.../i })).or(page.getByText('...')).first().click();`
+- Đối với mọi thao tác Click (Action tương tác): TUYỆT ĐỐI KHÔNG DÙNG `page.getByText()` để click (vì có thể bấm nhầm vào text tĩnh, dialog title hoặc dòng vô nghĩa không kích hoạt event). BẮT BUỘC dùng các Interactive Role (`tab`, `button`, `link`) kết hợp chuỗi Fallback `.or(...)` và `.first()`:
+  `await page.getByRole('tab', { name: /.../i }).or(page.getByRole('button', { name: /.../i })).or(page.getByRole('link', { name: /.../i })).first().click();`
 - Đối với mọi thao tác Nhập liệu (`page.getByPlaceholder`, `page.getByLabel`): BẮT BUỘC gắn chuỗi Fallback `.or(page.getByLabel(...)).first()`:
   `await page.getByPlaceholder(/tên đăng nhập/i).or(page.getByLabel(/tên đăng nhập/i)).first().fill('admin');`
 - Không đổi Expected Result. Nếu action chưa xác minh thì dùng `test.fixme`, không đoán.

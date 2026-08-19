@@ -19,6 +19,7 @@
     "typecheck:core": "tsc -p tsconfig.core.json",
     "test:e2e": "tsx src/cli.js --level e2e",
     "setup": "setup.bat",
+    "clean:cache": "node -e \"import('fs').then(fs => { ['.testkit', 'test-results', 'artifacts/action-plan.json', 'artifacts/crawled-dom.md', 'artifacts/discovery-dom.md'].forEach(p => fs.rmSync(p, { recursive: true, force: true })); console.log('✅ Đã xóa toàn bộ Guided Learning cache và test artifacts thành công!'); })\"",
     "test:all": "tsx src/cli.js --level unit && tsx src/cli.js --level e2e"
   },
   "devDependencies": {

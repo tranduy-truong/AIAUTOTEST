@@ -547,20 +547,14 @@ export function enforceVerifiedActionPlan(
     if (end >= lines.length) continue;
 
     const bodyIndent = `${startIndent}  `;
-    const unresolved = testCase.actions.find(action => action.confidence === 'low');
     const replacement: string[] = [];
-    if (unresolved) {
-      const reason = `Bước ${unresolved.stepIndex} chưa được Planner/Crawler xác minh`;
-      replacement.push(`${bodyIndent}test.fixme(true, '${reason}');`);
-    } else {
-      for (const action of testCase.actions) {
-        if (action.description) {
-          const description = action.description.replace(/^[-*•·▪◦–—]\s*/u, '').replace(/[\r\n]+/g, ' ');
-          replacement.push(`${bodyIndent}// ${description}`);
-        }
-        for (const actionLine of action.playwrightCode.split('\n')) {
-          if (actionLine.trim()) replacement.push(`${bodyIndent}${actionLine.trim()}`);
-        }
+    for (const action of testCase.actions) {
+      if (action.description) {
+        const description = action.description.replace(/^[-*•·▪◦–—]\s*/u, '').replace(/[\r\n]+/g, ' ');
+        replacement.push(`${bodyIndent}// ${description}`);
+      }
+      for (const actionLine of action.playwrightCode.split('\n')) {
+        if (actionLine.trim()) replacement.push(`${bodyIndent}${actionLine.trim()}`);
       }
     }
 
@@ -963,14 +957,14 @@ export function fixCommonPlaywrightIssues(code: string, actionPlan?: ActionPlan)
     fixes.push("FIX-18: Loại bỏ các bước đăng nhập trùng lặp (>1 lần) trong cùng một testcase");
   }
 
-  // ── FIX 19: Tự động chuyển đổi các nút Tab sang Fallback Selector (.or) toàn diện ──
+  // ── FIX 19: Tự động chuyển đổi các nút Tab sang Fallback Selector (.or) toàn diện (interactive roles: tab, button, link) ──
   // 19a. Dựa trên tên tab nghiệp vụ phổ biến
-  const tabNamesList = "Thông tin chung|Quá trình thay đổi|Lịch sử thay đổi|Chi tiết cơ sở|Thông tin cơ sở|Chức việc|Chức sắc|Nhà tu hành|Tín đồ|Tất cả|Tổ chức|Cơ sở|Nhân sự|Ban đại diện|Ban trị sự|Hồ sơ|Lịch sử|Phân loại";
+  const tabNamesList = "Thông tin chung|Quá trình thay đổi|Lịch sử thay đổi|Chi tiết cơ sở|Thông tin cơ sở|Chức việc|Chức sắc|Nhà tu hành|Tín đồ|Tất cả|Tổ chức|Cơ sở|Nhân sự|Ban đại diện|Ban trị sự|Hồ sơ|Lịch sử|Phân loại|General|Details|History|Overview|All|Settings|Users|Products|Items|Description|Reviews|Specs";
   const tabButtonPattern = new RegExp(`await\\s+page\\.getByRole\\(['"]button['"],\\s*\\{\\s*name:\\s*(['"](?:${tabNamesList})['"]|/(?:${tabNamesList})/i)(?:,\\s*exact:\\s*(?:true|false))?\\s*\\}\\)\\.click\\(\\);?`, "g");
   if (tabButtonPattern.test(fixed)) {
     fixed = fixed.replace(tabButtonPattern, (_match, nameArg) => {
       const cleanName = nameArg.replace(/^['"]+|['"]+$/g, "");
-      return `await page.getByRole('tab', { name: '${cleanName}' }).or(page.getByRole('button', { name: '${cleanName}' })).or(page.getByText('${cleanName}')).first().click();`;
+      return `await page.getByRole('tab', { name: '${cleanName}' }).or(page.getByRole('button', { name: '${cleanName}' })).or(page.getByRole('link', { name: '${cleanName}' })).first().click();`;
     });
     fixes.push("FIX-19: Chuyển đổi getByRole('button') trên Tab sang Fallback Pattern an toàn (.or)");
   }
@@ -980,7 +974,7 @@ export function fixCommonPlaywrightIssues(code: string, actionPlan?: ActionPlan)
   if (commentTabButtonPattern.test(fixed)) {
     fixed = fixed.replace(commentTabButtonPattern, (_match, comment, nameArg) => {
       const cleanName = nameArg.replace(/^['"]+|['"]+$/g, "");
-      return `${comment}await page.getByRole('tab', { name: '${cleanName}' }).or(page.getByRole('button', { name: '${cleanName}' })).or(page.getByText('${cleanName}')).first().click();`;
+      return `${comment}await page.getByRole('tab', { name: '${cleanName}' }).or(page.getByRole('button', { name: '${cleanName}' })).or(page.getByRole('link', { name: '${cleanName}' })).first().click();`;
     });
     fixes.push("FIX-19b: Tự động chuyển nút Tab theo comment bước kiểm thử sang Fallback Pattern (.or)");
   }
@@ -992,26 +986,11 @@ export function fixCommonPlaywrightIssues(code: string, actionPlan?: ActionPlan)
     fixes.push("FIX-20: Loại bỏ { exact: true } cho chuỗi text dài để tránh lỗi không khớp dữ liệu động");
   }
 
-  // ── FIX 21: Tự động gắn Fallback .or() và .first() cho toàn bộ các lệnh Click & Fill (Phòng ngừa lỗi trượt element) ──
-  // 21a. Tự động thêm Fallback .or() cho mọi lệnh Click nếu chưa có .or()
-  const standaloneClickPattern = /await\s+page\.(getByRole\(['"](?:button|tab|link)['"],\s*\{\s*name:\s*([^,}]+?)(?:,\s*exact:\s*(?:true|false))?\s*\}\)|getByText\(([^)]+?)\))(?!\.or\()\s*\.(?:first\(\)\.)?click\(([^)]*)\);?/g;
-  if (standaloneClickPattern.test(fixed)) {
-    fixed = fixed.replace(standaloneClickPattern, (_match, _fullLocator, roleName, textName, clickArgs) => {
-      const name = (roleName || textName || "").trim();
-      const extraArgs = clickArgs ? clickArgs : "";
-      return `await page.getByRole('tab', { name: ${name} }).or(page.getByRole('button', { name: ${name} })).or(page.getByText(${name})).first().click(${extraArgs});`;
-    });
-    fixes.push("FIX-21: Tự động gắn Fallback .or() và .first() cho tất cả các thao tác Click");
-  }
-
-  // 21b. Tự động thêm Fallback .or() cho mọi lệnh Fill Input nếu chưa có .or()
-  const standaloneFillPattern = /await\s+page\.(getByPlaceholder\(([^)]+?)\)|getByLabel\(([^)]+?)\))(?!\.or\()\s*\.(?:first\(\)\.)?fill\(([^)]+?)\);?/g;
-  if (standaloneFillPattern.test(fixed)) {
-    fixed = fixed.replace(standaloneFillPattern, (_match, _fullLocator, placeholderArg, labelArg, fillValue) => {
-      const target = (placeholderArg || labelArg || "").trim();
-      return `await page.getByPlaceholder(${target}).or(page.getByLabel(${target})).first().fill(${fillValue});`;
-    });
-    fixes.push("FIX-21b: Tự động gắn Fallback .or() và .first() cho tất cả các thao tác Fill Input");
+  // ── FIX 21: BẮT BUỘC & RÀNG BUỘC toàn bộ lệnh Click & Fill dùng chuỗi Fallback Interactive Roles (.or) và .first() (KHÔNG dùng getByText trên click) ──
+  const universalOrResult = enforceUniversalOrChaining(fixed);
+  if (universalOrResult.fixCount > 0) {
+    fixed = universalOrResult.code;
+    fixes.push(`FIX-21: RÀNG BUỘC ${universalOrResult.fixCount} thao tác Click & Fill sang chuỗi Fallback interactive roles (.or) và .first()`);
   }
 
   // Log các fix đã áp dụng
@@ -1023,4 +1002,104 @@ export function fixCommonPlaywrightIssues(code: string, actionPlan?: ActionPlan)
   }
 
   return fixed;
+}
+
+/**
+ * Hàm RÀNG BUỘC bắt buộc 100% mọi thao tác click() và fill() trên page.get...
+ * đều phải có chuỗi Fallback .or() và .first() phía sau.
+ * TUYỆT ĐỐI KHÔNG dùng getByText() cho action click (chỉ dùng tab, button, link).
+ */
+function enforceUniversalOrChaining(code: string): { code: string; fixCount: number } {
+  const lines = code.split('\n');
+  let fixCount = 0;
+
+  for (let i = 0; i < lines.length; i++) {
+    let line = lines[i];
+
+    // 1. Xử lý các thao tác click()
+    if (line.includes('.click(')) {
+      const indent = line.match(/^\s*/)?.[0] || '';
+      const prevLine = i > 0 ? lines[i - 1] : '';
+      const isSidebarAction = prevLine.toLowerCase().includes('sidebar') || line.toLowerCase().includes('sidebar');
+
+      // Loại bỏ getByText trần khỏi chuỗi click nếu đã bị chèn trước đó (trừ trường hợp scoped trong aside/nav)
+      if (line.includes('.or(') && line.includes('getByText(') && !line.includes('aside') && !line.includes('nav')) {
+        line = line.replace(/\.or\(\s*page\.getByText\([^)]+\)\s*\)/g, '');
+        lines[i] = line;
+      }
+
+      // Xử lý menu điều hướng Sidebar (hỗ trợ cả SPA div/span clickable menu items)
+      if (isSidebarAction) {
+        const menuMatch = line.match(/name:\s*(['"][^'"]+['']|\/[^/]+\/[a-z]*)/) || prevLine.match(/menu\s+([A-ZÀ-ỹ0-9\s]+?)\s+trên/i);
+        if (menuMatch) {
+          const rawName = menuMatch[1].startsWith("'") ? menuMatch[1] : `'${menuMatch[1].trim()}'`;
+          lines[i] = `${indent}await page.getByRole('link', { name: ${rawName} }).or(page.getByRole('button', { name: ${rawName} })).or(page.locator('aside, nav, ul').getByText(${rawName})).first().click({ noWaitAfter: true });`;
+          fixCount++;
+          continue;
+        }
+      }
+
+      if (!line.includes('.or(')) {
+        // 1a. Khớp getByRole('button' | 'tab' | 'link' | 'menuitem', { name: '...' })
+        const roleMatch = line.match(/await\s+page\.getByRole\(['"](?:button|tab|link|menuitem)['"],\s*\{\s*name:\s*(['"][^'"]+['"]|\/[^/]+\/[a-z]*)(?:,\s*exact:\s*(?:true|false))?\s*\}\)\.(?:first\(\)\.)?click\(([^)]*)\);?/);
+        if (roleMatch) {
+          const name = roleMatch[1];
+          const extraArgs = roleMatch[2]?.trim() ? roleMatch[2].trim() : '';
+          lines[i] = `${indent}await page.getByRole('tab', { name: ${name} }).or(page.getByRole('button', { name: ${name} })).or(page.getByRole('link', { name: ${name} })).first().click(${extraArgs});`;
+          fixCount++;
+          continue;
+        }
+
+        // 1b. Khớp getByText('...') chuyển thành interactive role fallback
+        const textMatch = line.match(/await\s+page\.getByText\((['"][^'"]+['"]|\/[^/]+\/[a-z]*)(?:,\s*exact:\s*(?:true|false))?\)\.(?:first\(\)\.)?click\(([^)]*)\);?/);
+        if (textMatch) {
+          const name = textMatch[1];
+          const extraArgs = textMatch[2]?.trim() ? textMatch[2].trim() : '';
+          lines[i] = `${indent}await page.getByRole('tab', { name: ${name} }).or(page.getByRole('button', { name: ${name} })).or(page.getByRole('link', { name: ${name} })).first().click(${extraArgs});`;
+          fixCount++;
+          continue;
+        }
+      }
+    }
+
+    // 2. Xử lý các thao tác fill()
+    if (line.includes('.fill(')) {
+      const indent = line.match(/^\s*/)?.[0] || '';
+
+      // Tự động chữa lỗi ID ngẫu nhiên của React (#base-ui-...) bị nhầm là input
+      if (line.includes('#base-ui-')) {
+        const fillValMatch = line.match(/\.fill\(([^)]+)\)/);
+        if (fillValMatch) {
+          lines[i] = `${indent}await page.locator('input[type="text"]').or(page.locator('input:not([type="hidden"])')).first().fill(${fillValMatch[1]});`;
+          fixCount++;
+          continue;
+        }
+      }
+
+      if (!line.includes('.or(')) {
+        // Khớp getByPlaceholder('...') hoặc getByLabel('...')
+        const fillMatch = line.match(/await\s+page\.(?:getByPlaceholder|getByLabel)\((['"][^'"]+['"]|\/[^/]+\/[a-z]*)\)\.(?:first\(\)\.)?fill\(([^)]+)\);?/);
+        if (fillMatch) {
+          const target = fillMatch[1];
+          const fillValue = fillMatch[2];
+          lines[i] = `${indent}await page.getByPlaceholder(${target}).or(page.getByLabel(${target})).first().fill(${fillValue});`;
+          fixCount++;
+          continue;
+        }
+      }
+    }
+
+    // 3. Xử lý các assertions getByText().toBeVisible()
+    if (line.includes('getByText(') && line.includes('.toBeVisible()')) {
+      // Xóa exact: true
+      line = line.replace(/page\.getByText\(([^,)]+),\s*\{\s*exact:\s*(?:true|false)\s*\}\)/g, 'page.getByText($1)');
+      // Đảm bảo có .first()
+      if (!line.includes('.first()') && !line.includes('.last()') && !line.includes('.nth(')) {
+        line = line.replace(/(page\.getByText\([^)]+\))(?!\s*\.\s*(first|last|nth))\s*\)\.toBeVisible\(\)/g, '$1.first()).toBeVisible()');
+      }
+      lines[i] = line;
+    }
+  }
+
+  return { code: lines.join('\n'), fixCount };
 }

@@ -1,0 +1,37 @@
+# ==============================================================================
+# AIAUTOTEST Universal Project Profile
+# File cấu hình trung tâm cho dự án kiểm thử API & E2E
+# ==============================================================================
+
+project:
+  name: "Mobifone DEMA API & E2E"
+  baseUrl: "https://hcm.mobifone.vn"
+  specUrl: "https://hcm.mobifone.vn/dema/api/schema/"
+
+auth:
+  strategy: bearer
+  # Token có thể lấy từ biến môi trường hoặc tự động trích xuất từ .auth/storage-state.json
+  bearerToken: "${env:API_BEARER_TOKEN}"
+  loginEndpoint: "/dema/api/token/"
+  loginBody:
+    username: "${env:API_USERNAME || admin}"
+    password: "${env:API_PASSWORD || 123123}"
+
+throttling:
+  delayMs: 40
+  maxRetries: 2
+
+# Các endpoint cần bỏ qua để tránh side-effect phá hủy session hoặc vi phạm ràng buộc DB
+skipEndpoints:
+  - "POST /dema/api/token/logout/"                    # Tránh hủy JWT session khi đang chạy test
+  - "DELETE /dema/api/religions/*"                     # Tránh lỗi 500 do khóa ngoại dữ liệu danh mục gốc
+  - "DELETE /dema/api/religious-organization-types/*"  # Tránh lỗi 500 do khóa ngoại
+  - "DELETE /dema/api/language-branches/*"             # Tránh lỗi 500 do khóa ngoại
+  - "DELETE /dema/api/language-families/*"             # Tránh lỗi 500 do khóa ngoại
+
+# Ghi đè payload nếu cần cho endpoint đặc thù
+payloadOverrides:
+  "/dema/api/token/":
+    POST:
+      username: "admin"
+      password: "${env:API_PASSWORD || 123123}"

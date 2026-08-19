@@ -78,71 +78,67 @@ async function mainMenu() {
         {
           name: menuChoice(
             "01",
-            "Lên kế hoạch & sinh test",
-            "Planner → Generator",
+            "E2E Web UI",
+            "Tự động khám phá & sinh test Playwright",
           ),
-          value: "plan_and_generate",
+          value: "flow_e2e",
         },
         {
-          name: menuChoice("02", "Sinh test từ kế hoạch có sẵn", "Generator • dùng test-plan hiện có"),
-          value: "generate_from_plan",
-        },
-        {
-          name: menuChoice("03", "Chạy E2E", "Playwright • giao diện"),
-          value: "run_e2e",
+          name: menuChoice(
+            "02",
+            "API / Integration",
+            "Nạp OpenAPI/Swagger → Tự động test & kiểm chứng",
+          ),
+          value: "flow_api_integration",
         },
         {
           name: menuChoice(
             "03",
-            "Chạy Integration",
-            "API • database (Sandbox)",
+            "Unit Test",
+            "Đọc source code thật → Sinh & chạy Vitest",
           ),
-          value: "run_integration",
+          value: "flow_unit",
         },
-
+        new inquirer.Separator('  ─── [THỰC THI TEST ĐÃ CÓ (TEST RUNNERS)] ────────────────'),
         {
-          name: menuChoice(
-            "04",
-            "Test API",
-            "Nạp OpenAPI/Swagger → Tự động test",
-          ),
-          value: "api_wizard",
+          name: menuChoice("04", "Chạy E2E Test", "Playwright • tests/e2e"),
+          value: "run_e2e",
         },
         {
-          name: menuChoice("05", "Chạy Unit Test", "Vitest • logic nội bộ"),
+          name: menuChoice("05", "Chạy Unit Test", "Vitest • tests/unit"),
           value: "run_unit",
         },
         {
-          name: menuChoice("06", "Xác nhận kết quả Unit", "Tiếp tục phiên đang chờ"),
+          name: menuChoice("06", "Xác nhận kết quả Unit", "Duyệt Oracle cho Unit"),
           value: "review_unit_oracles",
         },
-
         {
-          name: menuChoice("07", "Xem báo cáo", "Kết quả gần nhất"),
+          name: menuChoice("07", "Sinh lại test từ Kế hoạch", "Dùng artifacts/test-plan-*.json"),
+          value: "generate_from_plan",
+        },
+        new inquirer.Separator('  ─── [TIỆN ÍCH HỆ THỐNG] ──────────────────────────────────'),
+        {
+          name: menuChoice("08", "Xem báo cáo", "Tổng hợp kết quả gần nhất"),
           value: "view_report",
         },
-        { name: menuChoice("08", "Thoát", "Đóng ứng dụng"), value: "exit" },
+        { name: menuChoice("09", "Thoát", "Đóng ứng dụng"), value: "exit" },
       ],
     },
   ]);
 
   switch (action) {
-    case "plan_and_generate":
-      await handlePlanAndGenerate();
+    case "flow_e2e":
+      await handlePlanAndGenerate("e2e");
       break;
-    case "generate_from_plan":
-      await handleGenerateFromExistingPlan();
+    case "flow_api_integration":
+      await handleApiIntegrationFlow();
+      break;
+    case "flow_unit":
+      await handlePlanAndGenerate("unit");
       break;
     case "run_e2e":
       await runTests("e2e");
       break;
-    case "run_integration":
-      await runTests("integration");
-      break;
-    case "api_wizard":
-      await runApiTestWizard();
-      await returnToMenu();
-      return;
     case "run_unit":
       await runTests("unit");
       break;
@@ -150,11 +146,48 @@ async function mainMenu() {
       await reviewPendingUnitOracles({ askToStart: false });
       await returnToMenu();
       return;
+    case "generate_from_plan":
+      await handleGenerateFromExistingPlan();
+      break;
     case "view_report":
       showReport();
       break;
     case "exit":
       process.exit(0);
+  }
+}
+
+// ─── TÍNH NĂNG CON: ĐIỀU HƯỚNG TẦNG API & INTEGRATION ─────────────────────────
+async function handleApiIntegrationFlow() {
+  const { mode } = await inquirer.prompt([
+    {
+      type: "list",
+      name: "mode",
+      message: "Chọn phương thức kiểm thử API / Integration:",
+      choices: [
+        {
+          name: "📋 OpenAPI / Swagger Contract Test (Khuyến nghị — Nạp file/URL & tự động test ngay)",
+          value: "wizard",
+        },
+        {
+          name: "📝 AI Integration Scenario Planner (Nhập kịch bản nghiệp vụ bằng lời văn tự nhiên)",
+          value: "ai_planner",
+        },
+        {
+          name: "📦 Database Sandbox Runner (Chạy test tích hợp trong môi trường Sandbox)",
+          value: "sandbox",
+        },
+      ],
+    },
+  ]);
+
+  if (mode === "wizard") {
+    await runApiTestWizard();
+    await returnToMenu();
+  } else if (mode === "ai_planner") {
+    await handlePlanAndGenerate("integration");
+  } else if (mode === "sandbox") {
+    await runTests("integration");
   }
 }
 
@@ -244,26 +277,29 @@ async function handleGenerateFromExistingPlan() {
 }
 
 // 3. TÍNH NĂNG: GỌI PLANNER LÊN KẾ HOẠCH & GENERATOR SINH CODE
-async function handlePlanAndGenerate() {
-  // Chọn tầng kiểm thử
-  const { level } = await inquirer.prompt([
-    {
-      type: "list",
-      name: "level",
-      message: "Bạn muốn sinh test case cho tầng nào?",
-      choices: [
-        { name: "E2E (Kiểm thử luồng giao diện - Blackbox)", value: "e2e" },
-        {
-          name: "Integration (Kiểm thử API/Tích hợp - Greybox)",
-          value: "integration",
-        },
-        {
-          name: "Unit (Kiểm thử hàm/component nội bộ - Whitebox)",
-          value: "unit",
-        },
-      ],
-    },
-  ]);
+async function handlePlanAndGenerate(forcedLevel) {
+  let level = forcedLevel;
+  if (!level) {
+    const res = await inquirer.prompt([
+      {
+        type: "list",
+        name: "level",
+        message: "Bạn muốn sinh test case cho tầng nào?",
+        choices: [
+          { name: "E2E (Kiểm thử luồng giao diện - Blackbox)", value: "e2e" },
+          {
+            name: "Integration (Kiểm thử API/Tích hợp - Greybox)",
+            value: "integration",
+          },
+          {
+            name: "Unit (Kiểm thử hàm/component nội bộ - Whitebox)",
+            value: "unit",
+          },
+        ],
+      },
+    ]);
+    level = res.level;
+  }
 
   // Cấp Context (Dữ liệu đầu vào) tùy theo tầng
   let contextData = "";
@@ -1209,14 +1245,35 @@ ${result.report}
 
 // 4. TÍNH NĂNG: XEM BÁO CÁO CẬP NHẬT
 function showReport() {
+  console.log("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+  console.log("  📊 DANH SÁCH BÁO CÁO KIỂM THỬ GẦN NHẤT");
+  console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+
+  let foundAny = false;
+
+  const htmlReport = path.resolve("artifacts/api-test-report.html");
+  if (fs.existsSync(htmlReport)) {
+    console.log(`  🌐 Báo cáo HTML Trực quan: file:///${htmlReport.replace(/\\/g, '/')}`);
+    foundAny = true;
+  }
+
+  const xmlReport = path.resolve("artifacts/api-test-report.xml");
+  if (fs.existsSync(xmlReport)) {
+    console.log(`  📑 Báo cáo chuẩn JUnit XML: file:///${xmlReport.replace(/\\/g, '/')}`);
+    foundAny = true;
+  }
+
   if (fs.existsSync("artifacts/report.md")) {
     const content = fs.readFileSync("artifacts/report.md", "utf-8");
-    console.log("\n------------------ BÁO CÁO GẦN NHẤT ------------------");
-    console.log(content);
-    console.log("------------------------------------------------------\n");
-  } else {
-    warning("Chưa có báo cáo kiểm thử nào.");
+    console.log("\n  📄 Báo cáo E2E gần nhất (artifacts/report.md):");
+    console.log(content.slice(0, 1000) + (content.length > 1000 ? "\n  ... [Xem tiếp trong file]" : ""));
+    foundAny = true;
   }
+
+  if (!foundAny) {
+    warning("Chưa có báo cáo kiểm thử nào được ghi nhận.");
+  }
+  console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
   returnToMenu();
 }
 

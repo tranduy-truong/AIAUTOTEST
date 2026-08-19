@@ -59,14 +59,18 @@ export function evaluateApiAssertion(
   response: ApiResponseSnapshot,
 ): ApiAssertionResult {
   switch (assertion.type) {
-    case 'STATUS':
+    case 'STATUS': {
+      const isEquivalentSuccess = (assertion.expected === 200 && response.status === 204) ||
+                                  (assertion.expected === 204 && response.status === 200);
+      const isOk = response.status === assertion.expected || isEquivalentSuccess;
       return {
         type: assertion.type,
-        ok: response.status === assertion.expected,
-        message: response.status === assertion.expected
+        ok: isOk,
+        message: isOk
           ? `HTTP status đúng: ${response.status}`
           : `HTTP status sai: expected ${assertion.expected}, received ${response.status}`,
       };
+    }
 
     case 'STATUS_IN':
       return {

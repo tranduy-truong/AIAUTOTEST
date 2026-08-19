@@ -113,7 +113,16 @@ function datedUniqueTestPath(
 }
 
 function findTsConfig(projectRoot: string): string | undefined {
-  for (const name of ['tsconfig.json', 'jsconfig.json']) {
+  // Tìm theo thứ tự ưu tiên: tsconfig.json trước, sau đó các tên phổ biến khác
+  const candidates = [
+    'tsconfig.json',
+    'jsconfig.json',
+    'tsconfig.core.json',
+    'tsconfig.base.json',
+    'tsconfig.app.json',
+    'tsconfig.test.json',
+  ];
+  for (const name of candidates) {
     const candidate = path.join(projectRoot, name);
     if (fs.existsSync(candidate)) return candidate;
   }
@@ -125,6 +134,11 @@ function formatDiagnostic(diagnostic: ts.Diagnostic): string {
   if (!diagnostic.file || diagnostic.start === undefined) return message;
   const position = diagnostic.file.getLineAndCharacterOfPosition(diagnostic.start);
   return `${position.line + 1}:${position.character + 1} ${message}`;
+}
+
+/** Kiểm tra xem package có tồn tại trong node_modules của projectRoot không. */
+function isPackageInstalledInProject(projectRoot: string, packageName: string): boolean {
+  return fs.existsSync(path.join(projectRoot, 'node_modules', packageName));
 }
 
 export function typecheckGeneratedUnitFile(projectRoot: string, testFile: string): string[] {
@@ -145,6 +159,35 @@ export function typecheckGeneratedUnitFile(projectRoot: string, testFile: string
       options = { ...parsed.options, noEmit: true, incremental: false, composite: false };
     }
   }
+
+  // ★ BUG-FIX: `Cannot find module 'vitest'` khi tsconfig khai báo `types: ["node"]`.
+  //
+  // Khi `types` được khai báo tường minh, TypeScript chỉ nạp declarations từ
+  // thư mục `@types/` (ví dụ: @types/node). Vitest KHÔNG phát hành qua @types/
+  // mà bundle declaration trực tiếp trong package — nên thêm 'vitest' vào
+  // `options.types` không có hiệu lực.
+  //
+  // Giải pháp đúng: nếu project có cài vitest, xóa restrict `types` (set = undefined)
+  // để TypeScript tự phát hiện toàn bộ declarations trong node_modules (bao gồm vitest),
+  // và set `typeRoots` trỏ tới node_modules của project đích.
+  if (isPackageInstalledInProject(projectRoot, 'vitest')) {
+    const vitestDts = path.join(projectRoot, 'node_modules', 'vitest', 'index.d.ts');
+    const vitestDistDts = path.join(projectRoot, 'node_modules', 'vitest', 'dist', 'index.d.ts');
+    const vitestHasDeclarations = fs.existsSync(vitestDts) || fs.existsSync(vitestDistDts);
+    if (vitestHasDeclarations) {
+      // Bỏ restriction `types` để TS tự scan node_modules (bao gồm vitest bundled types)
+      options = {
+        ...options,
+        types: undefined,
+        typeRoots: [
+          path.join(projectRoot, 'node_modules', '@types'),
+          path.join(projectRoot, 'node_modules'),
+        ],
+      };
+    }
+  }
+
+
   const normalizedTestFile = path.resolve(testFile);
   const program = ts.createProgram({ rootNames: [normalizedTestFile], options });
   return ts.getPreEmitDiagnostics(program)

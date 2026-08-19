@@ -24,10 +24,14 @@ import type {
 
 export interface OpenApiSchemaObject {
   type?: string;
+  format?: string;
+  enum?: unknown[];
+  default?: unknown;
   properties?: Record<string, OpenApiSchemaObject>;
   required?: string[];
   items?: OpenApiSchemaObject;
   $ref?: string;
+  [key: string]: unknown;
 }
 
 export interface OpenApiMediaType {
@@ -66,6 +70,10 @@ export interface OpenApiSpec {
   info: { title: string; version: string; description?: string };
   servers?: Array<{ url: string; description?: string }>;
   paths: Record<string, OpenApiPathItem>;
+  components?: {
+    schemas?: Record<string, unknown>;
+    [key: string]: unknown;
+  };
 }
 
 // ─── Loader — JSON + YAML universal ─────────────────────────────────────────
@@ -123,21 +131,46 @@ function parseYaml(filePath: string, raw: string): unknown {
   }
 }
 
+import { convertSwagger2ToOpenApi3 } from './swagger2-loader.js';
+import { convertPostmanToOpenApi3 } from './postman-loader.js';
+import { convertGraphQLToOpenApi3 } from './graphql-loader.js';
+
 function validateOpenApiStructure(spec: unknown, filePath: string): void {
   if (!spec || typeof spec !== 'object') {
     throw new Error(`[OpenAPI Loader] File "${filePath}" không phải object hợp lệ.`);
   }
   const s = spec as Record<string, unknown>;
+
+  // 1. Tự động nhận dạng nếu là GraphQL Introspection Schema
+  if (s['data'] && (s['data'] as any)['__schema'] || s['__schema']) {
+    const converted = convertGraphQLToOpenApi3(s);
+    Object.assign(s, converted);
+    return;
+  }
+
+  // 2. Tự động nhận dạng và chuyển đổi nếu là Postman Collection
+  if (s['info'] && ((s['info'] as any)['_postman_id'] || (s['info'] as any)['schema']?.includes('postman')) || s['item']) {
+    const converted = convertPostmanToOpenApi3(s);
+    Object.assign(s, converted);
+    return;
+  }
+
+  // 3. Tự động nhận dạng và chuyển đổi nếu là Swagger 2.0
+  if (s['swagger'] === '2.0' || (!s['openapi'] && s['swagger'])) {
+    const converted = convertSwagger2ToOpenApi3(s);
+    Object.assign(s, converted);
+    return;
+  }
+
   if (!s['openapi'] || !s['paths']) {
     throw new Error(
-      `[OpenAPI Loader] File "${filePath}" không đúng chuẩn OpenAPI 3.x ` +
-      '(thiếu trường "openapi" hoặc "paths"). Kiểm tra lại file của bạn.',
+      `[OpenAPI Loader] File "${filePath}" không đúng chuẩn OpenAPI 3.x, Swagger 2.0, Postman Collection hoặc GraphQL Introspection ` +
+      '(thiếu trường "openapi", "swagger", "item" hoặc "__schema"). Kiểm tra lại file của bạn.',
     );
   }
   if (!String(s['openapi']).startsWith('3.')) {
     throw new Error(
-      `[OpenAPI Loader] Chỉ hỗ trợ OpenAPI 3.x. File đang dùng version "${s['openapi']}". ` +
-      'Nếu dự án dùng Swagger 2.0, hãy convert qua openapi-converter trước.',
+      `[OpenAPI Loader] Chỉ hỗ trợ OpenAPI 3.x, Swagger 2.0, Postman Collection hoặc GraphQL. File đang dùng version "${s['openapi']}".`,
     );
   }
 }
@@ -198,6 +231,64 @@ function schemaToAssertions(
   return assertions;
 }
 
+import {
+  generateSmartPayload,
+  findSpecializedPayload,
+} from './template-registry.js';
+
+export { generateSmartPayload, findSpecializedPayload };
+
+// ─── Module / Domain Extractor ───────────────────────────────────────────────
+
+export interface OpenApiModuleGroup {
+  prefix: string;
+  name: string;
+  paths: string[];
+  operationCount: number;
+}
+
+/**
+ * Phân tích danh sách paths trong OpenAPI và gom nhóm thành các module nghiệp vụ trực quan.
+ */
+export function extractOpenApiModules(spec: OpenApiSpec): OpenApiModuleGroup[] {
+  const groups = new Map<string, { paths: Set<string>; count: number; name: string }>();
+
+  for (const [apiPath, pathItem] of Object.entries(spec.paths || {})) {
+    // Trích xuất base resource segment, ví dụ "/dema/api/religions/{code}/" -> "/dema/api/religions"
+    const segments = apiPath.split('/').filter(Boolean);
+    let prefix = apiPath;
+    let name = apiPath;
+
+    if (segments.length >= 3) {
+      // ví dụ: ["dema", "api", "religions"] -> "/dema/api/religions"
+      prefix = '/' + segments.slice(0, 3).join('/');
+      name = segments[2].replace(/[-_]+/g, ' ').toUpperCase();
+    } else if (segments.length >= 2) {
+      prefix = '/' + segments.slice(0, 2).join('/');
+      name = segments[1].replace(/[-_]+/g, ' ').toUpperCase();
+    }
+
+    if (!groups.has(prefix)) {
+      groups.set(prefix, { paths: new Set(), count: 0, name });
+    }
+
+    const grp = groups.get(prefix)!;
+    grp.paths.add(apiPath);
+
+    const methods = ['get', 'post', 'put', 'patch', 'delete', 'head'] as const;
+    for (const m of methods) {
+      if (pathItem[m]) grp.count++;
+    }
+  }
+
+  return Array.from(groups.entries()).map(([prefix, info]) => ({
+    prefix,
+    name: info.name,
+    paths: Array.from(info.paths),
+    operationCount: info.count,
+  }));
+}
+
 // ─── Suite Generator ──────────────────────────────────────────────────────────
 
 export interface GenerateOptions {
@@ -247,6 +338,31 @@ export function generateApiTestSuiteFromOpenApi(
           }
         }
 
+        // Tạo realistic payload cho POST/PUT/PATCH nếu có requestBody hoặc endpoint đặc thù
+        let requestBodyPayload: unknown = undefined;
+        let requestBodyType: ApiTestCase['request']['bodyType'] = undefined;
+
+        if (['post', 'put', 'patch'].includes(method)) {
+          const reqJson = operation.requestBody?.content?.['application/json'];
+          const schema = reqJson?.schema;
+
+          // 1. Kiểm tra template đặc thù (token, refresh, upload-url, password)
+          const specialized = findSpecializedPayload({
+            method,
+            path: apiPath,
+            schema,
+          });
+
+          if (specialized) {
+            requestBodyPayload = specialized;
+            requestBodyType = 'json';
+          } else if (schema) {
+            // 2. Tự động sinh smart payload từ schema (format, enum, required, min/max)
+            requestBodyPayload = generateSmartPayload(schema);
+            requestBodyType = 'json';
+          }
+        }
+
         tests.push({
           id,
           name: operation.summary
@@ -255,6 +371,8 @@ export function generateApiTestSuiteFromOpenApi(
           request: {
             method: method.toUpperCase() as ApiTestCase['request']['method'],
             path: apiPath,
+            body: requestBodyPayload,
+            bodyType: requestBodyType,
           },
           assertions,
           oracle,
@@ -262,6 +380,7 @@ export function generateApiTestSuiteFromOpenApi(
       }
     }
   }
+
 
   return {
     version: 1,

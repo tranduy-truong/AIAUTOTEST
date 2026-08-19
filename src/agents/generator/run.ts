@@ -415,10 +415,19 @@ test.describe('Product', () => {
         // Xóa dòng // FILE: ... khỏi nội dung file
         fileContent = fileContent.replace(/^\/\/ FILE:.*\n?/, "").trim();
 
+        // ★ BUG-FIX: Skip file rỗng — không ghi file trắng 1 byte
+        if (!fileContent || fileContent.length < 10) {
+          console.warn(`  ⚠️ Bỏ qua fragment ${i + 1}/${markers.length} vì nội dung rỗng.`);
+          continue;
+        }
+
         // ★ POST-PROCESSING: Sửa lỗi phổ biến trước khi ghi file
         fileContent = fixCommonPlaywrightIssues(fileContent, verifiedActionPlan);
 
-        const filePath = options?.exactFilePath
+        // ★ BUG-FIX: exactFilePath chỉ được dùng cho fragment đầu tiên (i=0).
+        // Các fragment còn lại PHẢI tạo file mới theo tên marker — không được
+        // ghi đè lẫn nhau vào cùng 1 path làm mất nội dung.
+        const filePath = (i === 0 && options?.exactFilePath)
           ? options.exactFilePath
           : level === 'e2e'
             ? createDatedUniqueSpecPath(
@@ -433,10 +442,16 @@ test.describe('Product', () => {
         console.log(`  ✅ Đã tạo/cập nhật: ${filePath}`);
       }
 
+      if (savedFiles.length === 0) {
+        console.error(`❌ Không có file spec nào được ghi — tất cả fragments đều rỗng!`);
+        return false;
+      }
+
       console.log(
         `\n✅ Sinh code thành công! ${savedFiles.length} file lưu tại: ${displayOutDir}/`,
       );
-      return typeof savedFiles[0] === 'string' ? savedFiles[0].replace(/\\/g, '/') : true;
+      // Trả về path của file đầu tiên thực sự được ghi (không nhất thiết là savedFiles[0] nếu i=0 bị skip)
+      return savedFiles[0].replace(/\\/g, '/');
     } else {
       // Trường hợp AI chỉ sinh 1 file (hoặc không dùng marker)
       // Xóa dòng "// FILE: ..." nếu có, rồi lưu vào 1 file

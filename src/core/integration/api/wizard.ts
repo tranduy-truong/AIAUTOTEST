@@ -13,6 +13,7 @@ import path from 'path';
 import readline from 'readline';
 import {
   loadOpenApiSpec,
+  extractOpenApiModules,
   generateApiTestSuiteFromOpenApi,
   writeApiTestSuiteArtifact,
   renderApiTestPlanMarkdown,
@@ -190,21 +191,59 @@ export async function runApiTestWizard(): Promise<void> {
       authValue = Buffer.from(`${username}:${password}`).toString('base64');
     }
 
-    // ── BƯỚC 4: Lọc endpoint (tùy chọn) ─────────────────────────────────────
+    // ── BƯỚC 4: Chọn module / lọc endpoint trực quan ───────────────────────
     console.log('');
-    const filterRaw = await prompt(rl, '? Chỉ test một số endpoint nhất định? (y/N): ');
-    let onlyPaths: string[] | undefined;
+    console.log('📂 BƯỚC 4: Chọn phạm vi kiểm thử (Module / Domain)');
 
-    if (filterRaw.toLowerCase() === 'y') {
-      console.log('   Nhập từng đường dẫn, Enter để kết thúc. Ví dụ: /dema/api/belief-facility/');
-      const paths: string[] = [];
-      while (true) {
-        const p = await prompt(rl, `   Endpoint #${paths.length + 1} (Enter để xong): `);
-        if (!p) break;
-        paths.push(p.startsWith('/') ? p : `/${p}`);
-        console.log(`   ✅ Đã thêm: ${paths[paths.length - 1]}`);
+    let onlyPaths: string[] | undefined;
+    try {
+      const parsedSpec = loadOpenApiSpec(specFilePath);
+      const modules = extractOpenApiModules(parsedSpec);
+
+      if (modules.length > 0) {
+        console.log('   Tìm thấy các nhóm module sau trong spec:');
+        console.log('   [0] 🌐 TOÀN BỘ API (Tất cả modules)');
+        modules.forEach((mod, idx) => {
+          console.log(`   [${idx + 1}] 📦 ${mod.name.padEnd(28)} (${mod.prefix}) — ${mod.operationCount} endpoints`);
+        });
+        console.log('');
+        const selectionRaw = await promptWithDefault(
+          rl,
+          '? Nhập số thứ tự module (ví dụ: 1 hoặc 1,3 hoặc 0 cho tất cả)',
+          '0',
+        );
+
+        if (selectionRaw !== '0' && selectionRaw.trim() !== '') {
+          const selectedIndices = selectionRaw
+            .split(/[,+\s]+/)
+            .map(s => parseInt(s.trim(), 10))
+            .filter(n => !isNaN(n) && n >= 1 && n <= modules.length);
+
+          if (selectedIndices.length > 0) {
+            const chosenPaths: string[] = [];
+            selectedIndices.forEach(idx => {
+              const mod = modules[idx - 1];
+              chosenPaths.push(...mod.paths);
+              console.log(`   ✅ Đã chọn module: ${mod.name} (${mod.paths.length} paths)`);
+            });
+            onlyPaths = [...new Set(chosenPaths)];
+          }
+        }
       }
-      if (paths.length > 0) onlyPaths = paths;
+    } catch {
+      // fallback nếu đọc spec bị lỗi ở bước preview
+      const filterRaw = await prompt(rl, '? Chỉ test một số endpoint nhất định? (y/N): ');
+      if (filterRaw.toLowerCase() === 'y') {
+        console.log('   Nhập từng đường dẫn, Enter để kết thúc. Ví dụ: /dema/api/religions/');
+        const paths: string[] = [];
+        while (true) {
+          const p = await prompt(rl, `   Endpoint #${paths.length + 1} (Enter để xong): `);
+          if (!p) break;
+          paths.push(p.startsWith('/') ? p : `/${p}`);
+          console.log(`   ✅ Đã thêm: ${paths[paths.length - 1]}`);
+        }
+        if (paths.length > 0) onlyPaths = paths;
+      }
     }
 
     rl.close();
@@ -349,7 +388,12 @@ async function executeWizard(config: WizardConfig): Promise<void> {
   const elapsed = Date.now() - startTime;
 
   // ── Kết quả ──────────────────────────────────────────────────────────────
-  const { markdownPath } = writeApiRunArtifacts(result, suite, runDir);
+  const { markdownPath, htmlPath, junitPath } = writeApiRunArtifacts(result, suite, runDir);
+
+  // Lưu bản sao báo cáo mới nhất ra thư mục artifacts gốc để tiện mở
+  try {
+    fs.copyFileSync(htmlPath, path.join(process.cwd(), 'artifacts', 'api-test-report.html'));
+  } catch {}
 
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
   console.log(`  ${result.ok ? '✅ TẤT CẢ TEST PASSED!' : '❌ CÓ TEST FAILED'}`);
@@ -378,7 +422,9 @@ async function executeWizard(config: WizardConfig): Promise<void> {
     });
   }
 
-  console.log(`  📄 Báo cáo chi tiết: ${markdownPath}`);
+  console.log(`  📄 Báo cáo Markdown:       ${markdownPath}`);
+  console.log(`  🌐 Báo cáo HTML trực quan:  file:///${htmlPath.replace(/\\/g, '/')}`);
+  console.log(`  📑 Báo cáo JUnit XML:      ${junitPath}`);
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
   console.log('');
 }

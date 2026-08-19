@@ -52,17 +52,19 @@ export class OpenAIAdapter {
           !envModel ||
           envModel.includes("llama") ||
           envModel.includes("gpt") ||
-          envModel === "gemini-2.0-flash" ||
-          envModel === "gemini-1.5-flash" ||
+          envModel.includes("2.5") ||
+          envModel.includes("2.0") ||
+          envModel.includes("1.5") ||
           envModel === "gemini-flash" ||
           envModel === "gemini"
         ) {
           this.model = "gemini-flash-latest";
-        } else if (envModel === "gemini-pro" || envModel === "gemini-1.5-pro" || envModel === "gemini-pro-latest") {
+        } else if (envModel === "gemini-pro" || envModel === "gemini-pro-latest") {
           this.model = "gemini-3-flash-preview";
         } else {
           this.model = envModel;
         }
+
 
         if (!apiKey) {
           console.warn("⚠️ CẢNH BÁO: Chưa tìm thấy GEMINI_API_KEY trong file .env!");

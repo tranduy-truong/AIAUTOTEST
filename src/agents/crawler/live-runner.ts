@@ -16,6 +16,8 @@ import {
   rememberLearnedLocator,
   saveLocatorRegistry,
 } from './locator-registry.js';
+import { loadAuthCredentialsCache } from '../../core/auth/auth-session.js';
+import { captureAuthSession } from '../../core/auth/auth-capture.js';
 
 interface GuidedChoice extends Partial<ElementInfo> {
   selector: string;
@@ -893,12 +895,53 @@ export async function runLive(testCases: ParsedTestCase[]): Promise<Map<string, 
       const snapshots: DomSnapshot[] = [];
       let abortRemainingSteps = false;
 
-      const context = await browser.newContext(isLoginSuite ? {} : contextOptions);
+      let context = await browser.newContext(isLoginSuite ? {} : contextOptions);
 
-      const page = await context.newPage();
+      // ★ BUG-FIX: Kiểm tra server-side session có còn hợp lệ không.
+      // File storage-state.json có thể tồn tại trên đĩa nhưng cookies đã hết hạn server-side.
+      // Phát hiện bằng cách thử goto trang đớa đườc bảo vệ trước — nếu redirect về login → hết hạn.
+      if (!isLoginSuite && contextOptions.storageState) {
+        const firstProtectedUrl = testCase.steps.find(
+          s => s.type === 'goto' && s.url && !isLoginUrl(s.url)
+        )?.url;
+        if (firstProtectedUrl) {
+          const probePage = await context.newPage();
+          let sessionExpired = false;
+          try {
+            await probePage.goto(firstProtectedUrl, { timeout: 12000, waitUntil: 'domcontentloaded' });
+            await probePage.waitForTimeout(600);
+            sessionExpired = isLoginUrl(probePage.url());
+          } catch {
+            // Probe failed — assume still ok, proceed
+          } finally {
+            await probePage.close().catch(() => {});
+          }
+
+          if (sessionExpired) {
+            console.warn(`[Live Runner] ⚠️  Session hết hạn server-side (TC ${testCaseIndex + 1}/${testCases.length})! Đang tự động tái xác thực...`);
+            const creds = loadAuthCredentialsCache();
+            if (creds) {
+              await context.close().catch(() => {});
+              try {
+                await captureAuthSession(creds);
+                console.log('[Live Runner] ✅ Tái xác thực thành công. Tiếp tục crawler với session mới.');
+                // Tạo context mới với storage-state vừa được cập nhật
+                context = await browser.newContext({ storageState: '.auth/storage-state.json' });
+              } catch (reAuthErr: any) {
+                console.warn(`[Live Runner] Tái xác thực thất bại: ${reAuthErr.message}. Tiếp tục với context sạch.`);
+                context = await browser.newContext();
+              }
+            } else {
+              console.warn(`[Live Runner] Không có credential cache để tái xác thực. Tiếp tục nhưng TC này có thể thất bại.`);
+            }
+          }
+        }
+      }
 
       try {
+        const page = await context.newPage();
         for (let index = 0; index < testCase.steps.length; index++) {
+
           if (abortRemainingSteps) break;
           const step = testCase.steps[index];
           const stepNumber = index + 1;

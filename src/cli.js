@@ -57,6 +57,26 @@ import {
 
 const harness = new TestPolicyHarness();
 
+const CLI_CACHE_PATH = path.resolve("artifacts/cli-cache.json");
+
+function loadCliCache() {
+  try {
+    if (fs.existsSync(CLI_CACHE_PATH)) {
+      return JSON.parse(fs.readFileSync(CLI_CACHE_PATH, "utf-8"));
+    }
+  } catch {}
+  return {};
+}
+
+function saveCliCache(data) {
+  try {
+    if (!fs.existsSync("artifacts")) fs.mkdirSync("artifacts", { recursive: true });
+    const current = loadCliCache();
+    const updated = { ...current, ...data };
+    fs.writeFileSync(CLI_CACHE_PATH, JSON.stringify(updated, null, 2), "utf-8");
+  } catch {}
+}
+
 function loadCurrentUnitOracleGateReport() {
   const session = loadUnitSession();
   const context = loadUnitContext(session);
@@ -184,9 +204,19 @@ async function handleApiIntegrationFlow() {
           name: "📦 Database Sandbox Runner (Chạy test tích hợp trong môi trường Sandbox)",
           value: "sandbox",
         },
+        new inquirer.Separator(),
+        {
+          name: "⬅️  Quay lại Menu chính",
+          value: "back",
+        },
       ],
     },
   ]);
+
+  if (mode === "back") {
+    await mainMenu();
+    return;
+  }
 
   if (mode === "wizard") {
     await runApiTestWizard();
@@ -234,9 +264,16 @@ async function handleGenerateFromExistingPlan() {
         { name: "E2E (Kiểm thử giao diện - artifacts/test-plan-e2e.json)", value: "e2e" },
         { name: "Integration (Kiểm thử API - artifacts/test-plan-integration.json)", value: "integration" },
         { name: "Unit (Kiểm thử Unit - artifacts/test-plan-unit.json)", value: "unit" },
+        new inquirer.Separator(),
+        { name: "⬅️  Quay lại Menu chính", value: "back" },
       ],
     },
   ]);
+
+  if (level === "back") {
+    await mainMenu();
+    return;
+  }
 
   const planPath = `artifacts/test-plan-${level}.json`;
   if (!fs.existsSync(planPath)) {
@@ -327,9 +364,15 @@ async function handlePlanAndGenerate(forcedLevel) {
             name: "Unit (Kiểm thử hàm/component nội bộ - Whitebox)",
             value: "unit",
           },
+          new inquirer.Separator(),
+          { name: "⬅️  Quay lại Menu chính", value: "back" },
         ],
       },
     ]);
+    if (res.level === "back") {
+      await mainMenu();
+      return;
+    }
     level = res.level;
   }
 
@@ -343,24 +386,36 @@ async function handlePlanAndGenerate(forcedLevel) {
       name: 'e2eMode',
       message: 'Chọn chế độ lập kế hoạch E2E:',
       choices: [
-        { name: '📝 Nhập kịch bản test thủ công (Script Mode)', value: 'script' },
         { name: '🔍 Tự động khám phá & sinh kịch bản (Discovery Mode)', value: 'discovery' },
+        { name: '📝 Nhập kịch bản test thủ công (Script Mode)', value: 'script' },
+        new inquirer.Separator(),
+        { name: '⬅️  Quay lại Menu chính', value: 'back' },
       ],
     }]);
+
+    if (e2eMode === 'back') {
+      await mainMenu();
+      return;
+    }
 
     if (e2eMode === 'discovery') {
       // ═══════════════════════════════════════════════════════════════
       // DISCOVERY MODE: Crawler tự quét đa trang → AI Planner sinh TC
       // ═══════════════════════════════════════════════════════════════
 
-      // 1. Hỏi URL gốc cần quét
-      const { seedUrlsRaw } = await inquirer.prompt([{
-        type: 'editor',
-        name: 'seedUrlsRaw',
-        message: 'Nhập URL gốc cần quét (mỗi dòng 1 URL, lưu và đóng editor khi xong):',
-      }]);
+      // 1. Hỏi URL gốc cần quét (sử dụng cache lần trước làm mặc định)
+      const cliCache = loadCliCache();
+      const { seedUrlsRaw } = await inquirer.prompt([
+        {
+          type: 'input',
+          name: 'seedUrlsRaw',
+          message: 'Nhập URL gốc cần quét (hoặc nhiều URL cách nhau bằng dấu phẩy):',
+          default: cliCache.lastSeedUrls || 'https://practicesoftwaretesting.com',
+          validate: (v) => (v && v.trim() ? true : 'Bắt buộc nhập URL.'),
+        },
+      ]);
       const seedUrls = seedUrlsRaw
-        .split(/[\r\n]+/)
+        .split(/[,;\r\n]+/)
         .map(line => line.trim())
         .filter(line => line.startsWith('http'));
       if (seedUrls.length === 0) {
@@ -368,39 +423,68 @@ async function handlePlanAndGenerate(forcedLevel) {
         await returnToMenu();
         return;
       }
+      saveCliCache({ lastSeedUrls: seedUrlsRaw.trim() });
       console.log(`   Sẽ quét ${seedUrls.length} URL gốc: ${seedUrls.join(', ')}`);
 
-      // 2. Hỏi Auth credentials (đơn giản, không lưu session, không hỏi label thừa)
+      // 2. Hỏi Auth credentials (sử dụng cache lần trước làm mặc định)
       const nonInteractive = process.argv.includes('--non-interactive');
       let discoveryAuthInfo = null;
 
       if (!nonInteractive) {
-        const { needsAuth } = await inquirer.prompt([{
-          type: 'confirm',
-          name: 'needsAuth',
-          message: 'Ứng dụng có yêu cầu đăng nhập không?',
-          default: true,
-        }]);
+        let suggestedLoginUrl = cliCache.lastLoginUrl || seedUrls[0] || '';
+        try {
+          const parsedSeed = new URL(seedUrls[0]);
+          if (parsedSeed.pathname === '/' || parsedSeed.pathname === '') {
+            suggestedLoginUrl = cliCache.lastLoginUrl || seedUrls[0];
+          } else if (/(login|dang-nhap|signin)/i.test(parsedSeed.pathname)) {
+            suggestedLoginUrl = seedUrls[0];
+          } else {
+            suggestedLoginUrl = cliCache.lastLoginUrl || (parsedSeed.origin + '/login');
+          }
+        } catch {}
 
-        if (needsAuth) {
-          let suggestedLoginUrl = seedUrls[0] || '';
-          try {
-            const parsedSeed = new URL(seedUrls[0]);
-            if (parsedSeed.pathname === '/' || parsedSeed.pathname === '') {
-              suggestedLoginUrl = seedUrls[0];
-            } else if (/(login|dang-nhap|signin)/i.test(parsedSeed.pathname)) {
-              suggestedLoginUrl = seedUrls[0];
-            } else {
-              suggestedLoginUrl = parsedSeed.origin + '/login';
-            }
-          } catch {}
+        const authAnswers = await inquirer.prompt([
+          {
+            type: 'confirm',
+            name: 'needsAuth',
+            message: 'Ứng dụng có yêu cầu đăng nhập không?',
+            default: cliCache.lastNeedsAuth !== undefined ? cliCache.lastNeedsAuth : true,
+          },
+          {
+            type: 'input',
+            name: 'loginUrl',
+            message: 'URL trang đăng nhập:',
+            default: cliCache.lastLoginUrl || suggestedLoginUrl,
+            when: (answers) => answers.needsAuth,
+            validate: (v) => (v && v.trim() ? true : 'Bắt buộc nhập URL.'),
+          },
+          {
+            type: 'input',
+            name: 'username',
+            message: 'Username / Email:',
+            default: cliCache.lastUsername || 'admin@practicesoftwaretesting.com',
+            when: (answers) => answers.needsAuth,
+          },
+          {
+            type: 'password',
+            name: 'password',
+            message: 'Password:',
+            default: cliCache.lastPassword || 'welcome01',
+            mask: '*',
+            when: (answers) => answers.needsAuth,
+          },
+        ]);
 
-          const authAnswers = await inquirer.prompt([
-            { type: 'input', name: 'loginUrl', message: 'URL trang đăng nhập:', default: suggestedLoginUrl, validate: v => v.trim() ? true : 'Bắt buộc nhập URL.' },
-            { type: 'input', name: 'username', message: 'Username / Email:', default: 'standard_user' },
-            { type: 'password', name: 'password', message: 'Password:', default: 'secret_sauce', mask: '*' },
-          ]);
+        saveCliCache({
+          lastNeedsAuth: authAnswers.needsAuth,
+          ...(authAnswers.needsAuth ? {
+            lastLoginUrl: authAnswers.loginUrl,
+            lastUsername: authAnswers.username,
+            lastPassword: authAnswers.password,
+          } : {}),
+        });
 
+        if (authAnswers.needsAuth) {
           discoveryAuthInfo = {
             loginUrl: authAnswers.loginUrl,
             username: authAnswers.username,
@@ -575,23 +659,50 @@ Vi du:
         const nonInteractive = process.argv.includes('--non-interactive');
 
         if (!nonInteractive) {
-          const { needsAuth } = await inquirer.prompt([{
-            type: 'confirm',
-            name: 'needsAuth',
-            message: 'Ứng dụng có yêu cầu đăng nhập không?',
-            default: false,
-          }]);
+          const detectedLoginUrl = parsedCases
+            .flatMap(tc => tc.steps)
+            .find(s => s.type === 'goto' && /(?:login|signin|sign-in|dang-nhap)/i.test(s.url || ''))?.url || '';
 
-          if (needsAuth) {
-            const detectedLoginUrl = parsedCases
-              .flatMap(tc => tc.steps)
-              .find(s => s.type === 'goto' && /(?:login|signin|sign-in|dang-nhap)/i.test(s.url || ''))?.url || '';
+          const cliCache = loadCliCache();
+          const authAnswers = await inquirer.prompt([
+            {
+              type: 'confirm',
+              name: 'needsAuth',
+              message: 'Ứng dụng có yêu cầu đăng nhập không?',
+              default: cliCache.lastNeedsAuth !== undefined ? cliCache.lastNeedsAuth : false,
+            },
+            {
+              type: 'input',
+              name: 'loginUrl',
+              message: 'URL trang đăng nhập:',
+              default: cliCache.lastLoginUrl || detectedLoginUrl || 'https://www.saucedemo.com/',
+              when: (answers) => answers.needsAuth,
+              validate: (v) => (v && v.trim() ? true : 'Bắt buộc nhập URL.'),
+            },
+            {
+              type: 'input',
+              name: 'username',
+              message: 'Username / Email:',
+              default: cliCache.lastUsername || 'standard_user',
+              when: (answers) => answers.needsAuth,
+            },
+            {
+              type: 'password',
+              name: 'password',
+              message: 'Password:',
+              default: cliCache.lastPassword || 'secret_sauce',
+              mask: '*',
+              when: (answers) => answers.needsAuth,
+            },
+          ]);
 
-            const authAnswers = await inquirer.prompt([
-              { type: 'input', name: 'loginUrl', message: 'URL trang đăng nhập:', default: detectedLoginUrl || 'https://www.saucedemo.com/', validate: v => v.trim() ? true : 'Bắt buộc nhập URL.' },
-              { type: 'input', name: 'username', message: 'Username / Email:', default: 'standard_user' },
-              { type: 'password', name: 'password', message: 'Password:', default: 'secret_sauce', mask: '*' },
-            ]);
+          if (authAnswers.needsAuth) {
+            saveCliCache({
+              lastNeedsAuth: true,
+              lastLoginUrl: authAnswers.loginUrl,
+              lastUsername: authAnswers.username,
+              lastPassword: authAnswers.password,
+            });
             console.log('[Auth] Đang mở trình duyệt để xác thực...');
             authSession = await captureAuthSession({ strategy: 'PLAYWRIGHT_STORAGE_STATE', ...authAnswers });
           }
@@ -695,12 +806,18 @@ Vi du:
         name: "inputMode",
         message: "Bạn muốn cung cấp mã nguồn theo cách nào?",
         choices: [
-          { name: "Chọn thư mục dự án", value: "folder" },
-          { name: "Chọn một file nguồn", value: "file" },
-          { name: "Dán đoạn code export để thử nhanh", value: "paste" },
+          { name: "📁 Chọn thư mục dự án", value: "folder" },
+          { name: "📄 Chọn một file nguồn", value: "file" },
+          { name: "📝 Dán đoạn code export để thử nhanh", value: "paste" },
+          new inquirer.Separator(),
+          { name: "⬅️  Quay lại Menu chính", value: "back" },
         ],
       },
     ]);
+    if (inputMode === "back") {
+      await mainMenu();
+      return;
+    }
     let unitInputPath = "";
     if (inputMode === "paste") {
       const { pastedCode } = await inquirer.prompt([
@@ -787,9 +904,15 @@ Vi du:
               name: `Phân tích tất cả ${eligibleTargets.length} target`,
               value: "all",
             },
+            new inquirer.Separator(),
+            { name: "⬅️  Quay lại Menu chính", value: "back" },
           ],
         },
       ]);
+      if (selectionMode === "back") {
+        await mainMenu();
+        return;
+      }
       if (selectionMode === "choose") {
         const { selected } = await inquirer.prompt([
           {
@@ -1246,15 +1369,62 @@ async function runTests(level) {
           choices: [
             { name: "⚡ Chạy tất cả các bộ test E2E (tests/e2e)", value: "tests/e2e" },
             new inquirer.Separator(),
-            ...specFiles.map(f => ({ name: `📄 ${f}`, value: path.join("tests", "e2e", f).replace(/\\/g, "/") }))
+            ...specFiles.map(f => ({ name: `📄 ${f}`, value: path.join("tests", "e2e", f).replace(/\\/g, "/") })),
+            new inquirer.Separator(),
+            { name: "⬅️  Quay lại Menu chính", value: "back" },
           ]
         }
       ]);
+      if (selectedSpec === "back") {
+        await mainMenu();
+        return;
+      }
       targetSpec = selectedSpec;
     }
   }
 
-  let command = `npx playwright test "${targetSpec}"`;
+  let e2eMode = "headless";
+  if (process.argv.includes('--ui')) {
+    e2eMode = "ui";
+  } else if (process.argv.includes('--headed')) {
+    e2eMode = "headed";
+  } else if (!process.argv.includes('--non-interactive')) {
+    const { selectedMode } = await inquirer.prompt([
+      {
+        type: "list",
+        name: "selectedMode",
+        message: "Chọn chế độ thực thi E2E:",
+        choices: [
+          { name: "⚡ Chạy ngầm (Headless Mode - Mặc định, nhanh, tự động vá lỗi Healer)", value: "headless" },
+          { name: "🖥️  Chạy mở trình duyệt (Headed Mode - Xem browser tự động thao tác)", value: "headed" },
+          { name: "🎨 Giao diện Playwright UI (--ui Mode - Tương tác trực quan, xem lại từng bước, time-travel)", value: "ui" },
+          new inquirer.Separator(),
+          { name: "⬅️  Quay lại Menu chính", value: "back" },
+        ]
+      }
+    ]);
+    if (selectedMode === "back") {
+      await mainMenu();
+      return;
+    }
+    e2eMode = selectedMode;
+  }
+
+  // Nếu chọn chế độ Playwright UI Mode
+  if (e2eMode === "ui") {
+    section("PLAYWRIGHT UI", "Giao diện Playwright UI Mode", `Đang mở dashboard tương tác cho: ${targetSpec}`);
+    detail("Tính năng", "Xem DOM snapshot, tua lại các bước (time-travel), debug network & console log.");
+    try {
+      execSync(`npx playwright test "${targetSpec}" --ui`, { stdio: "inherit" });
+      success("Đã đóng giao diện Playwright UI.");
+    } catch (err) {
+      // Khi user đóng cửa sổ UI, process kết thúc
+    }
+    await returnToMenu();
+    return;
+  }
+
+  let command = `npx playwright test "${targetSpec}"${e2eMode === "headed" ? " --headed" : ""} --retries=1`;
   const maxAttempts = 3;
   let attempt = 1;
   let allPassed = false;
@@ -1467,7 +1637,10 @@ async function runCliEntrypoint() {
         success("Integration Test pass thành công trong Sandbox Harness.");
         process.exit(0);
       } else if (targetLevel === "e2e") {
-        execSync("npx playwright test tests/e2e", { stdio: "inherit" });
+        const isUI = process.argv.includes('--ui');
+        const isHeaded = process.argv.includes('--headed');
+        const cmd = `npx playwright test tests/e2e${isUI ? ' --ui' : (isHeaded ? ' --headed' : '')}`;
+        execSync(cmd, { stdio: "inherit" });
         success("E2E Test pass.");
         process.exit(0);
       } else {

@@ -18,6 +18,7 @@ Khi đầu vào có `HỢP ĐỒNG ĐÃ HỢP NHẤT TỪ PLANNER VÀ CRAWLER`, 
   `await page.getByRole('tab', { name: /.../i }).or(page.getByRole('button', { name: /.../i })).or(page.getByRole('link', { name: /.../i })).first().click();`
 - Đối với mọi thao tác Nhập liệu (`page.getByPlaceholder`, `page.getByLabel`): BẮT BUỘC gắn chuỗi Fallback `.or(page.getByLabel(...)).first()`:
   `await page.getByPlaceholder(/tên đăng nhập/i).or(page.getByLabel(/tên đăng nhập/i)).first().fill('admin');`
+- Đối với thao tác Sắp xếp (Sorting dropdown / Sort Price, Name): TUYỆT ĐỐI KHÔNG assert `toHaveURL(/.*sort=.*/i)` khi trang không đổi URL. BẮT BUỘC dùng mảng text giá/tên trên DOM (`page.locator('[data-test="product-price"], [class*="price"]').allInnerTexts()`) và kiểm tra thứ tự sắp xếp bằng `expect(prices).toEqual([...prices].sort((a, b) => a - b))` kết hợp `page.waitForResponse(...)`.
 - Không đổi Expected Result. Nếu action chưa xác minh thì dùng `test.fixme`, không đoán.
 
 # Cấu trúc code & Chuẩn mực chất lượng (Theo Playwright Test Generator)

@@ -61,7 +61,9 @@ Với mỗi trang trong báo cáo DOM (E-commerce như SauceDemo, SaaS, Admin Po
 ## 1. Happy Path Scenarios (Luồng nghiệp vụ chính & Thao tác dữ liệu):
 - **E-Commerce / Danh sách sản phẩm (nếu có)**: Click "Add to cart" / "Thêm vào giỏ" → Kiểm tra biểu tượng giỏ hàng hiển thị badge số lượng (ví dụ: `1`) → Click vào Giỏ hàng → Kiểm tra sản phẩm đã chọn có trong giỏ → Click Checkout → Nhập thông tin thanh toán → Hoàn tất đơn hàng.
 - **Tìm kiếm / Lọc & Khôi phục (nếu có ô tìm kiếm/lọc)**: Nhập từ khóa hợp lệ → Bấm Tìm kiếm/Lọc → Kiểm tra kết quả hiển thị đúng. Xóa ô tìm kiếm/reset bộ lọc → Kiểm tra danh sách khôi phục đầy đủ ban đầu.
-- **Sắp xếp / Sort dropdown (nếu có)**: Chọn sắp xếp theo giá thấp đến cao (Price: low to high) hoặc Tên (A-Z) → Kiểm tra thứ tự hiển thị thay đổi tương ứng.
+- **Sắp xếp / Sort dropdown (nếu có)**: Chọn sắp xếp theo giá thấp đến cao (Price: low to high) hoặc Tên (A-Z) → Kiểm tra thứ tự hiển thị thay đổi tương ứng. **LƯU Ý QUAN TRỌNG VỀ ASSERTION SẮP XẾP**: Tuyệt đối không dùng `toHaveURL(/.*sort=.*/i)` vì các trang SPA (React/Vue/Angular như practicesoftwaretesting.com, SauceDemo) không thay đổi URL trình duyệt khi sort. BẮT BUỘC dùng:
+  - **Cách 1 (Kiểm tra dãy giá/tên trên DOM)**: Lấy toàn bộ giá/tên từ các thẻ sản phẩm và kiểm tra mảng tăng dần/giảm dần (`expect(prices).toEqual([...prices].sort((a, b) => a - b))`).
+  - **Cách 3 (Bắt gói tin API)**: Chờ response API `page.waitForResponse(res => res.url().includes('/products') && res.status() === 200)` phản hồi thành công.
 
 ## 2. Phân trang & Đổi Số dòng/trang (Pagination & Page Size - Nếu trang có phân trang):
 - **Chuyển trang qua lại (Pagination Navigation)**: Đang ở Trang 1 → `click` nút chuyển trang sau (`>`) → Kiểm tra bảng/danh sách tải dữ liệu của trang tiếp theo và cập nhật số trang. Sau đó `click` nút chuyển trang trước (`<`) → Kiểm tra quay về trang ban đầu.

@@ -356,13 +356,24 @@ function normalizeTestCase(value: unknown, testIndex: number): PlannerTestCase |
     }
   }
 
+  const postconditions = stringArray(input.postconditions);
+  const edgeRisks = stringArray(input.edgeRisks || input.risks);
+  const testData = input.testData && typeof input.testData === 'object'
+    ? input.testData as Record<string, unknown>
+    : typeof input.testData === 'string'
+      ? input.testData
+      : undefined;
+
   return {
     id,
     name,
     module: rawModule || `Phân hệ ${inferModuleAcronym(contextStr)}`,
     objective,
     preconditions,
+    testData,
     expectedResults,
+    postconditions: postconditions.length > 0 ? postconditions : undefined,
+    edgeRisks: edgeRisks.length > 0 ? edgeRisks : undefined,
     priority: ['Critical', 'High', 'Medium', 'Low'].includes(String(input.priority))
       ? input.priority as PlannerTestCase['priority']
       : 'High',

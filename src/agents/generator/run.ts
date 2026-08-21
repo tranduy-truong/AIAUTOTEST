@@ -550,8 +550,12 @@ export function enforceVerifiedActionPlan(
     const replacement: string[] = [];
     for (const action of testCase.actions) {
       if (action.description) {
-        const description = action.description.replace(/^[-*•·▪◦–—]\s*/u, '').replace(/[\r\n]+/g, ' ');
+        const description = action.description.replace(/^[-*•s]*/u, '').replace(/[\r\n]+/g, ' ');
         replacement.push(`${bodyIndent}// ${description}`);
+      }
+      if (action.confidence === 'low' && action.type !== 'noop') {
+        replacement.push(`${bodyIndent}test.fixme(true, 'Bước ${action.stepIndex} chưa được Planner/Crawler xác minh');`);
+        continue;
       }
       for (const actionLine of action.playwrightCode.split('\n')) {
         if (actionLine.trim()) replacement.push(`${bodyIndent}${actionLine.trim()}`);

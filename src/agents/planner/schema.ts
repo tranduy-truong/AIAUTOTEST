@@ -38,7 +38,10 @@ export interface PlannerTestCase extends ParsedTestCase {
   module?: string;
   objective?: string;
   preconditions?: string[];
+  testData?: Record<string, unknown> | string;
   expectedResults?: string[];
+  postconditions?: string[];
+  edgeRisks?: string[];
   priority?: 'Critical' | 'High' | 'Medium' | 'Low';
   testType?: string[];
   automationSuitability?: 'Yes' | 'No' | 'Partial';

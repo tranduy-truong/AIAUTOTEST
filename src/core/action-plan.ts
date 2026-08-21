@@ -79,7 +79,26 @@ export function buildActionPlan(
   options: { persist?: boolean } = {},
 ): ActionPlan {
   const plan: ActionPlan = { testCases: [] };
-  const sharedSnapshots = [...snapshotsMap.values()].flat();
+  const discoverySnapshots: DomSnapshot[] = [];
+  try {
+    const discoveryPath = path.join(process.cwd(), 'artifacts', 'discovery-dom.json');
+    if (fs.existsSync(discoveryPath)) {
+      const parsedDiscovery = JSON.parse(fs.readFileSync(discoveryPath, 'utf-8'));
+      if (Array.isArray(parsedDiscovery?.pages)) {
+        for (const p of parsedDiscovery.pages) {
+          if (Array.isArray(p.elements) && p.elements.length > 0) {
+            discoverySnapshots.push({
+              afterStep: `discovery: ${p.url}`,
+              url: p.url,
+              elements: p.elements,
+            });
+          }
+        }
+      }
+    }
+  } catch {}
+
+  const sharedSnapshots = [...snapshotsMap.values()].flat().concat(discoverySnapshots);
 
   for (const testCase of parsedCases) {
     const snapshots = snapshotsMap.get(testCase.id) || [];

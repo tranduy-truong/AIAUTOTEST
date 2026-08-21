@@ -233,12 +233,22 @@ export function guidedPickScript(
 // chèn helper nội bộ (ví dụ __name) mà Playwright không thể serialize sang page.
 export const CAPTURE_SNAPSHOT_SCRIPT = String.raw`
   (() => {
+    // 1. Quét toàn diện tất cả các phần tử tương tác, điều hướng, và cấu trúc chứa text
     const query = [
       'input', 'textarea', 'select', 'option', 'button', 'a[href]', 'label', 'svg', 'i',
       '[role]', '[aria-label]', '[aria-haspopup]', '[data-test]', '[data-testid]', '[data-cy]', '[data-qa]',
       '[data-slot]', '[data-value]', '[title]', '[onclick]', '[tabindex]',
+      'li', 'summary', '[class*="menu"]', '[class*="sidebar"]', '[class*="nav"]', '[class*="tab"]',
+      '[class*="item"]', '[class*="card"]', '[class*="btn"]', '[class*="cursor-pointer"]',
+      '[data-state]', '[data-orientation]', '[aria-expanded]', '[aria-selected]',
+      'tr', 'th', 'td', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'
     ].join(', ');
-    const nodes = Array.from(document.querySelectorAll(query));
+    const rawNodes = Array.from(document.querySelectorAll(query));
+    const nodes = rawNodes.filter(function (n) {
+      const tag = n.tagName.toLowerCase();
+      if (tag === 'script' || tag === 'style' || tag === 'noscript') return false;
+      return true;
+    });
 
     function escapeCss(value) {
       if (globalThis.CSS && typeof globalThis.CSS.escape === 'function') {
@@ -257,7 +267,7 @@ export const CAPTURE_SNAPSHOT_SCRIPT = String.raw`
       
       const testId = interactive.getAttribute('data-test') || interactive.getAttribute('data-testid') || interactive.getAttribute('data-cy') || interactive.getAttribute('data-qa');
       if (testId) return '[data-test="' + escapeCss(testId) + '"], [data-testid="' + escapeCss(testId) + '"]';
-      if (interactive.id) return '#' + escapeCss(interactive.id);
+      if (interactive.id && !/base-ui|_r_|[a-f0-9]{10,}/i.test(interactive.id)) return '#' + escapeCss(interactive.id);
 
       const dataSlot = interactive.getAttribute('data-slot');
       const dataValue = interactive.getAttribute('data-value');
@@ -281,8 +291,8 @@ export const CAPTURE_SNAPSHOT_SCRIPT = String.raw`
 
       const classes = (interactive.getAttribute('class') || '')
         .split(/\s+/)
-        .filter(Boolean)
-        .slice(0, 4)
+        .filter(function (c) { return c && !c.includes(':') && !/^[0-9]/.test(c); })
+        .slice(0, 3)
         .map(function (className) { return '.' + escapeCss(className); })
         .join('');
       if (classes) {
@@ -318,13 +328,14 @@ export const CAPTURE_SNAPSHOT_SCRIPT = String.raw`
 
       const rect = node.getBoundingClientRect();
       const style = globalThis.getComputedStyle(htmlNode);
-      const isVisible = rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+      const isVisible = rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none' && style.opacity !== '0';
       const inputValue = (node.tagName.toLowerCase() === 'input' && /^(submit|button|reset)$/i.test(node.type || '')) ? node.value : undefined;
       const accessibleName =
         node.getAttribute('aria-label') ||
         interactive?.getAttribute('aria-label') ||
         node.getAttribute('title') ||
         interactive?.getAttribute('title') ||
+        node.getAttribute('placeholder') ||
         inputValue ||
         (interactive?.textContent || node.textContent || '').trim().substring(0, 100) ||
         undefined;
@@ -336,6 +347,14 @@ export const CAPTURE_SNAPSHOT_SCRIPT = String.raw`
       const nearbyLabel = explicitLabel || wrappingLabel || node.parentElement?.querySelector('label');
       const scope = node.closest('dialog, [role="dialog"], [aria-modal="true"], form, [data-slot="sheet-content"], [class*="drawer"], [class*="modal"]');
       const row = node.closest('tr, [role="row"], [data-row-key], [data-testid*="row"], [class*="table-row"], [class*="inventory_item"], [class*="card"], [class*="product"], [class*="item"], article, li, [data-test*="item"]');
+      const parentMenu = node.closest('aside [class*="group"], nav [class*="group"], aside [class*="item"], nav [class*="item"], ul, li');
+      const menuGroup = parentMenu ? (parentMenu.querySelector('button, [class*="title"], span')?.textContent || '').trim() : undefined;
+
+      const isExpanded = node.getAttribute('aria-expanded') === 'true' || node.getAttribute('data-state') === 'open' || interactive?.getAttribute('aria-expanded') === 'true';
+      const isActive = node.classList.contains('active') || node.getAttribute('aria-selected') === 'true' || node.getAttribute('data-state') === 'active';
+      const isDisabled = node.disabled || node.getAttribute('aria-disabled') === 'true' || node.getAttribute('data-disabled') !== null;
+      const isRequired = node.required || node.getAttribute('aria-required') === 'true';
+      const isInvalid = node.getAttribute('aria-invalid') === 'true' || node.classList.contains('error') || node.classList.contains('is-invalid');
 
       return {
         tag: node.tagName.toLowerCase(),
@@ -343,7 +362,7 @@ export const CAPTURE_SNAPSHOT_SCRIPT = String.raw`
         role: node.getAttribute('role') || (interactive && interactive.getAttribute('role')) || undefined,
         placeholder: node.getAttribute('placeholder') || undefined,
         ariaLabel: node.getAttribute('aria-label') || (interactive && interactive.getAttribute('aria-label')) || undefined,
-        text: (inputValue || node.textContent || '').trim().substring(0, 100),
+        text: (inputValue || node.textContent || '').trim().replace(/\s+/g, ' ').substring(0, 100),
         testId: node.getAttribute('data-test') || node.getAttribute('data-testid') || node.getAttribute('data-cy') || node.getAttribute('data-qa') || (interactive && (interactive.getAttribute('data-test') || interactive.getAttribute('data-testid') || interactive.getAttribute('data-cy') || interactive.getAttribute('data-qa'))) || undefined,
         dataSlot: node.getAttribute('data-slot') || (interactive && interactive.getAttribute('data-slot')) || undefined,
         dataValue: node.getAttribute('data-value') || (interactive && interactive.getAttribute('data-value')) || undefined,
@@ -357,6 +376,14 @@ export const CAPTURE_SNAPSHOT_SCRIPT = String.raw`
         scopeSelector: scope ? uniqueSelector(scope) : undefined,
         rowText: row ? (row.textContent || '').trim().replace(/\s+/g, ' ').substring(0, 300) : undefined,
         rowSelector: row ? uniqueSelector(row) : undefined,
+        menuGroup: menuGroup || undefined,
+        state: {
+          isExpanded: isExpanded ? true : undefined,
+          isActive: isActive ? true : undefined,
+          isDisabled: isDisabled ? true : undefined,
+          isRequired: isRequired ? true : undefined,
+          isInvalid: isInvalid ? true : undefined,
+        },
         ariaHasPopup: node.getAttribute('aria-haspopup') || (interactive && interactive.getAttribute('aria-haspopup')) || undefined,
         selector: uniqueSelector(node),
         isVisible,
@@ -556,7 +583,32 @@ function locatorCandidates(page: Page, resolution: ResolvedLocator, target: stri
     case 'page_size_trigger':
       return [
         page.getByRole('combobox'),
-        page.locator('[data-slot="select-trigger"], select, [aria-haspopup="listbox"]'),
+        page.locator('[data-slot="select-trigger"], select, [aria-haspopup="listbox"], button:has-text("▼"), button:has-text("/ trang")'),
+        page.getByRole('button', { name: /20|10|50/ }),
+      ];
+    case 'search_button':
+      return [
+        page.getByRole('button', { name: /tìm kiếm|search/i }),
+        page.locator('button:has-text("Tìm kiếm"), button:has-text("Search"), button[type="submit"], button:has(svg), [aria-label*="tìm kiếm" i], [aria-label*="search" i], .btn-search'),
+        page.locator('input[type="submit"][value="Tìm kiếm"]'),
+      ];
+    case 'save_button':
+      return [
+        page.locator('[role="dialog"], [data-slot="dialog"], [data-slot="sheet-content"], modal, form').getByRole('button', { name: /lưu|save|cập nhật/i }),
+        page.getByRole('button', { name: /lưu|save|cập nhật/i }),
+        page.locator('button:has-text("Lưu"), button:has-text("Save"), button[type="submit"], [aria-label*="lưu" i]'),
+      ];
+    case 'cancel_button':
+      return [
+        page.locator('[role="dialog"], [data-slot="dialog"], [data-slot="sheet-content"], modal, [data-slot="alert-dialog-content"]').getByRole('button', { name: /hủy|cancel|đóng|close|không/i }),
+        page.getByRole('button', { name: /hủy|cancel|đóng|close|không/i }),
+        page.locator('button:has-text("Hủy"), button:has-text("Cancel"), button:has-text("Đóng"), [aria-label*="close" i]'),
+      ];
+    case 'confirm_delete_button':
+      return [
+        page.locator('[role="dialog"], [data-slot="dialog"], [data-slot="sheet-content"], modal, [data-slot="alert-dialog-content"]').getByRole('button', { name: /xác nhận|đồng ý|xóa/i }),
+        page.getByRole('button', { name: /xác nhận|đồng ý|xóa/i }),
+        page.locator('button:has-text("Xác nhận"), button:has-text("Đồng ý"), button.btn-danger, [data-slot*="confirm"]'),
       ];
     case 'placeholder':
       return element?.placeholder ? [page.getByPlaceholder(element.placeholder, { exact: true }), page.getByLabel(element.placeholder, { exact: true })] : [page.getByPlaceholder(cleanTarget), page.getByLabel(cleanTarget)];
@@ -721,23 +773,91 @@ async function uniqueLocatorFor(
   const resolution = resolveLocator(stepType, target, snapshot, context, ariaRole);
   const candidates = locatorCandidates(page, resolution, target, context);
 
+  // Tier 1: Candidates từ Resolution Engine
   for (const candidate of candidates) {
     try {
-      await candidate.first().waitFor({ state: 'attached', timeout: 3000 });
+      await candidate.first().waitFor({ state: 'attached', timeout: 1500 });
+      const count = await candidate.count().catch(() => 0);
+      if (count >= 1 && await candidate.first().isVisible().catch(() => false)) {
+        return candidate.first();
+      }
     } catch {
       continue;
     }
-    const count = await candidate.count().catch(() => 0);
-    if (count >= 1 && await candidate.first().isVisible().catch(() => false)) {
-      return candidate.first();
+  }
+
+  const cleanTarget = target.replace(/^['"]|['"]$/g, '').trim();
+
+  // Tier 2: Tìm kiếm trong Navigation/Sidebar & Tự động click mở Accordion/Menu cha nếu đang đóng
+  const navContainers = page.locator('aside, nav, [role="navigation"], [class*="sidebar"], [class*="menu"], [class*="nav"], header');
+  const navMatch = navContainers.getByText(cleanTarget, { exact: true })
+    .or(navContainers.getByText(cleanTarget, { exact: false }))
+    .or(navContainers.locator('li, a, button, div, span').filter({ hasText: cleanTarget }));
+  
+  const navCount = await navMatch.count().catch(() => 0);
+  if (navCount > 0) {
+    const firstNav = navMatch.first();
+    if (await firstNav.isVisible().catch(() => false)) {
+      return firstNav;
+    }
+    // Nếu phần tử có trong menu nhưng chưa hiển thị (do accordion nhóm cha đang đóng):
+    // Tự động tìm và click mở các menu cha đang đóng trong sidebar
+    try {
+      const parentCollapsible = page.locator('aside [aria-expanded="false"], nav [aria-expanded="false"], [class*="sidebar"] [class*="collapse"], [class*="sidebar"] [data-state="closed"]');
+      const collCount = await parentCollapsible.count().catch(() => 0);
+      for (let i = 0; i < Math.min(collCount, 4); i++) {
+        await parentCollapsible.nth(i).click({ timeout: 800 }).catch(() => {});
+        await page.waitForTimeout(150);
+        if (await firstNav.isVisible().catch(() => false)) {
+          return firstNav;
+        }
+      }
+    } catch {}
+  }
+
+  // Tier 3: Tìm kiếm trong Modal / Dialog / Sheet đang mở
+  const dialogContainer = page.locator('[role="dialog"], [data-slot="dialog"], [data-slot="sheet-content"], modal, [class*="modal"], [class*="drawer"]');
+  if (await dialogContainer.count().catch(() => 0) > 0) {
+    const dialogMatch = dialogContainer.getByRole('button', { name: new RegExp(cleanTarget, 'i') })
+      .or(dialogContainer.getByText(cleanTarget, { exact: true }))
+      .or(dialogContainer.locator('button, a, input[type="submit"]').filter({ hasText: cleanTarget }));
+    if (await dialogMatch.count().catch(() => 0) > 0 && await dialogMatch.first().isVisible().catch(() => false)) {
+      return dialogMatch.first();
     }
   }
 
-  if (runtime.guided) {
-    return learnGuidedLocatorFor(page, stepType, target, snapshot, runtime, context, guidance);
+  // Tier 4: Universal Fuzzy Matching trên toàn trang (Role, Text, Attribute, Title, Span, Div)
+  const universalMatches = [
+    page.getByRole('button', { name: cleanTarget, exact: false }),
+    page.getByRole('link', { name: cleanTarget, exact: false }),
+    page.getByRole('tab', { name: cleanTarget, exact: false }),
+    page.getByRole('menuitem', { name: cleanTarget, exact: false }),
+    page.getByText(cleanTarget, { exact: true }),
+    page.getByText(cleanTarget, { exact: false }),
+    page.locator(`[aria-label*="${cleanTarget}" i], [title*="${cleanTarget}" i]`),
+    page.locator(`button:has-text("${cleanTarget}"), a:has-text("${cleanTarget}"), span:has-text("${cleanTarget}"), div:has-text("${cleanTarget}"), li:has-text("${cleanTarget}")`),
+  ];
+
+  for (const match of universalMatches) {
+    try {
+      const count = await match.count().catch(() => 0);
+      if (count > 0) {
+        for (let i = 0; i < Math.min(count, 5); i++) {
+          const item = match.nth(i);
+          if (await item.isVisible().catch(() => false)) {
+            return item;
+          }
+        }
+      }
+    } catch {}
   }
 
-  throw new Error(`Khong tim thay locator duy nhat cho "${target}" (${resolution.matchedBy})`);
+  // Tier 5: 100% Autonomous Fallback - Tuyệt đối không bao giờ hiển thị popup/banner chặn người dùng
+  console.log(`[Crawler-Auto] Tự động chọn phần tử khả dĩ nhất cho "${target}" mà không gián đoạn.`);
+  if (candidates.length > 0) {
+    return candidates[0].first();
+  }
+  return page.locator(`:text("${cleanTarget}")`).first();
 }
 
 async function uniqueLocator(

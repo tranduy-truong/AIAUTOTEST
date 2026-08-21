@@ -1,3 +1,11 @@
+export interface ElementState {
+  isExpanded?: boolean;
+  isActive?: boolean;
+  isDisabled?: boolean;
+  isRequired?: boolean;
+  isInvalid?: boolean;
+}
+
 export interface ElementInfo {
   tag: string;
   type?: string;
@@ -20,6 +28,8 @@ export interface ElementInfo {
   rowSelector?: string;
   ariaHasPopup?: string;
   selector?: string;
+  menuGroup?: string;
+  state?: ElementState;
   learnedStepType?: string;
   learnedTarget?: string;
   learnedContext?: string;
@@ -446,11 +456,43 @@ export function resolveLocator(
       };
     }
     // Hỗ trợ chọn số dòng/trang (Page Size)
-    if (/số dòng\/trang|so dong\/trang|rows per page|page size|số dòng/i.test(cleanTarget.trim())) {
+    if (/số dòng\/trang|so dong\/trang|rows per page|page size|số dòng|\b\d+▼|\b\d+\s*▼|\b\d+\s*\/\s*trang/i.test(cleanTarget.trim())) {
       return {
-        locator: `page.getByRole('combobox').or(page.locator('[data-slot="select-trigger"], select, [aria-haspopup="listbox"]')).first()`,
+        locator: `page.getByRole('combobox').or(page.locator('[data-slot="select-trigger"], select, [aria-haspopup="listbox"], button:has-text("▼"), button:has-text("/ trang")')).first()`,
         confidence: 'high',
         matchedBy: 'page_size_trigger'
+      };
+    }
+    // Hỗ trợ nút Tìm kiếm (Search Button & Icon)
+    if (/^(tìm kiếm|tim kiem|search|tìm)$/i.test(cleanTarget.trim())) {
+      return {
+        locator: `page.getByRole('button', { name: /tìm kiếm|search/i }).or(page.locator('button:has-text("Tìm kiếm"), button:has-text("Search"), button[type="submit"], button:has(svg), [aria-label*="tìm kiếm" i], [aria-label*="search" i], .btn-search')).first()`,
+        confidence: 'high',
+        matchedBy: 'search_button'
+      };
+    }
+    // Hỗ trợ nút Lưu / Cập nhật Form
+    if (/^(lưu|luu|lưu lại|save|cập nhật|cap nhat)$/i.test(cleanTarget.trim())) {
+      return {
+        locator: `page.getByRole('button', { name: /lưu|save|cập nhật/i }).or(page.locator('button:has-text("Lưu"), button:has-text("Save"), button[type="submit"], [aria-label*="lưu" i]')).first()`,
+        confidence: 'high',
+        matchedBy: 'save_button'
+      };
+    }
+    // Hỗ trợ nút Hủy / Đóng Modal
+    if (/^(hủy|huy|hủy bỏ|cancel|đóng|dong|close|không)$/i.test(cleanTarget.trim())) {
+      return {
+        locator: `page.getByRole('button', { name: /hủy|cancel|đóng|close/i }).or(page.locator('button:has-text("Hủy"), button:has-text("Cancel"), button:has-text("Đóng"), [aria-label*="close" i]')).first()`,
+        confidence: 'high',
+        matchedBy: 'cancel_button'
+      };
+    }
+    // Hỗ trợ nút Xác nhận xóa / Đồng ý
+    if (/^(xác nhận xóa|xac nhan xoa|xác nhận|xac nhan|đồng ý|dong y|delete confirm)$/i.test(cleanTarget.trim())) {
+      return {
+        locator: `page.getByRole('button', { name: /xác nhận|đồng ý|xóa/i }).or(page.locator('button:has-text("Xác nhận"), button:has-text("Đồng ý"), button.btn-danger, [data-slot*="confirm"]')).first()`,
+        confidence: 'high',
+        matchedBy: 'confirm_delete_button'
       };
     }
     // Hỗ trợ thao tác trên từng dòng / item / card theo Context

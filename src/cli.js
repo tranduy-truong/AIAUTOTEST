@@ -236,6 +236,7 @@ async function handleClearCache() {
     "artifacts/action-plan.json",
     "artifacts/crawled-dom.md",
     "artifacts/discovery-dom.md",
+    "artifacts/discovery-dom.json",
     "artifacts/locator-registry.json",
   ];
 
@@ -541,7 +542,8 @@ async function handlePlanAndGenerate(forcedLevel) {
       if (!fs.existsSync("artifacts")) fs.mkdirSync("artifacts");
       const discoveryReport = buildDiscoveryReport(discoveryResult);
       fs.writeFileSync("artifacts/discovery-dom.md", discoveryReport);
-      console.log('   Lưu tại: artifacts/discovery-dom.md');
+      fs.writeFileSync("artifacts/discovery-dom.json", JSON.stringify(discoveryResult, null, 2));
+      console.log('   Lưu tại: artifacts/discovery-dom.md & artifacts/discovery-dom.json');
 
       // 5. Gọi Discovery Planner (AI tự sinh kịch bản từ element + auth info)
       const { runDiscoveryPlanner } = await import("./agents/planner/run.js");

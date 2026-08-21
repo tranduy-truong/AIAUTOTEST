@@ -16,7 +16,15 @@ function stepText(testCase: PlannerTestCase): string {
   }).join('<br>');
 }
 
-function testData(testCase: PlannerTestCase): string {
+function formatTestData(testCase: PlannerTestCase): string {
+  if (testCase.testData) {
+    if (typeof testCase.testData === 'object') {
+      return Object.entries(testCase.testData)
+        .map(([k, v]) => `${k}: ${v}`)
+        .join('<br>');
+    }
+    return String(testCase.testData);
+  }
   return testCase.steps
     .flatMap(step => {
       if (step.type === 'fill' && step.target) return [`${step.target}: ${step.value ?? ''}`];
@@ -29,26 +37,30 @@ function testData(testCase: PlannerTestCase): string {
 
 export function renderStructuredPlanMarkdown(plan: StructuredE2EPlan): string {
   const lines = [
-    '# E2E Test Plan',
+    '# BẢNG KẾ HOẠCH KIỂM THỬ E2E (CHUẨN KỸ NGHỆ DEVIQA)',
     '',
-    '| ID | Module | Test Case Name | Objective | Preconditions | Test Steps | Test Data | Expected Result | Priority | Test Type | Automation Suitability | Notes |',
-    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+    '| Test Case ID | Title / Scenario | Module | Priority | Test Type | Preconditions | Test Data | Test Steps | Expected Result | Postconditions | Notes / Edge Risks |',
+    '| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |',
   ];
 
   for (const testCase of plan.testCases) {
+    const combinedNotes = [
+      ...(testCase.notes || []),
+      ...(testCase.edgeRisks || []),
+    ];
+
     lines.push(`| ${[
       testCase.id,
-      testCase.module,
       testCase.name,
-      testCase.objective,
-      testCase.preconditions,
-      stepText(testCase),
-      testData(testCase),
-      testCase.expectedResults,
+      testCase.module,
       testCase.priority,
       testCase.testType,
-      testCase.automationSuitability,
-      testCase.notes,
+      testCase.preconditions,
+      formatTestData(testCase),
+      stepText(testCase),
+      testCase.expectedResults,
+      testCase.postconditions,
+      combinedNotes.length > 0 ? combinedNotes : undefined,
     ].map(cell).join(' | ')} |`);
   }
 

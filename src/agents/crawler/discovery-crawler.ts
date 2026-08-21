@@ -103,12 +103,22 @@ async function waitForStableDom(page: Page): Promise<void> {
   try {
     await page.waitForLoadState('domcontentloaded', { timeout: 15000 });
     await page.waitForFunction(
-      `document.querySelector('input, textarea, select, button, a[href], [role]') !== null`,
+      `document.querySelector('input, textarea, select, button, a[href], [role], li, [class*="menu"]') !== null`,
       undefined,
       { timeout: 8000 },
     );
-    // Chờ thêm 500ms cho SPA render xong
-    await page.waitForTimeout(600);
+    // Tự động bung mở toàn bộ Accordion / Sidebar menu cha đang đóng để cào toàn bộ element con
+    await page.evaluate(() => {
+      try {
+        const closedAccordions = Array.from(document.querySelectorAll('aside [aria-expanded="false"], nav [aria-expanded="false"], [class*="sidebar"] [class*="collapse"], [class*="sidebar"] [data-state="closed"], details:not([open])'));
+        for (const el of closedAccordions) {
+          (el as HTMLElement).click?.();
+        }
+      } catch {}
+    }).catch(() => {});
+
+    // Chờ thêm 500ms cho SPA render đầy đủ các sub-elements
+    await page.waitForTimeout(500);
   } catch {
     // Trang có thể không có element tương tác — vẫn snapshot
   }

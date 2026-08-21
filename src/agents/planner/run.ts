@@ -249,7 +249,7 @@ async function callPlannerAdapter(taskContent: string, suffix = '') {
       promptDir: workDir,
       workDir,
       timeoutMs: 120000,
-      maxTokens: 3000,
+      maxTokens: 8192,
     });
     if (result.ok || !/rate.limit|tokens per minute|tpm|429|413|rate_limit_exceeded|too many requests/i.test(result.rawOutput) || attempt === 4) {
       return result;

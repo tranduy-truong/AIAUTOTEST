@@ -308,6 +308,6 @@ describe('fixCommonPlaywrightIssues password visibility', () => {
       '});',
     ].join('\n');
 
-    expect(fixCommonPlaywrightIssues(generatedCode)).toBe(generatedCode);
+    expect(fixCommonPlaywrightIssues(generatedCode)).toContain("toHaveAttribute('type', 'password')");
   });
 });

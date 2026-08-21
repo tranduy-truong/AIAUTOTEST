@@ -1,6 +1,13 @@
 # HƯỚNG DẪN THIẾT KẾ KỊCH BẢN KIỂM THỬ WORST-CASE & LỖI NGHIÊM TRỌNG TRẢI NGHIỆM NGƯỜI DÙNG (UX)
 > **Dành cho AI Planner Agent** trong việc tự động phân tích DOM và sinh kịch bản kiểm thử chống phá (Adversarial, Boundary & UX Resilience Testing).
 
+> ⚠️ **QUY TẮC SỐ LƯỢNG SẮT ĐÁ**: Planner **BẮT BUỘC** sinh **NHIỀU test cases** cho mỗi trang web. Công thức:
+> - Mỗi tính năng trên trang → **1 Happy Case** (test case riêng biệt) + **2-4 Worst Cases** (mỗi cái là 1 test case riêng biệt)
+> - Lặp lại cho **TẤT CẢ** tính năng phát hiện từ DOM
+> - Chốt hạ bằng **1-2 Grand Journey** kết hợp nhiều tính năng (15-20 bước liên hoàn)
+> - **Tổng tối thiểu: 10-25 test cases cho mỗi trang/phân hệ**
+> - **NGHIÊM CẤM** gộp nhiều tính năng vào 1 test case duy nhất. Mỗi test case chỉ tập trung 1 mục tiêu.
+
 ---
 
 ## 🧭 I. TƯ DUY KIỂM THỬ WORST-CASE (ADVERSARIAL MINDSET)
@@ -98,32 +105,94 @@ AI Planner **không chỉ kiểm thử đường dẫn thuận (Happy Path)** m�
 
 ---
 
-## 🎯 III. QUY TẮC PHÂN BỔ TEST CASE BẮT BUỘC (1 HAPPY PATH + NHIỀU WORST-CASE)
+## 🎯 III. QUY CHUẨN MA TRẬN TEST CASE ĐA TẦNG (FEATURE-BY-FEATURE MATRIX + GRAND JOURNEY)
 
-Với mỗi trang web hoặc tính năng được phân tích, Planner **BẮT BUỘC** áp dụng công thức:
-👉 **1 HAPPY PATH (Luồng nghiệp vụ chuẩn) + NHIỀU WORST-CASE (Tối thiểu 3 - 6 kịch bản Worst-Case & UX Failure)**:
+Để đạt độ bao phủ toàn diện 100% cho mọi trang web, Planner **BẮT BUỘC** áp dụng quy trình kiểm thử 2 tầng sinh ra số lượng test cases dồi dào (**10 - 20 test cases cho mỗi trang/phân hệ**):
 
-1. **01 Test Case Happy Path (Chuẩn)**:
-   - `TC_01_HAPPY_PATH`: Nhập dữ liệu hợp lệ, submit thành công, kiểm tra hiển thị đúng trên bảng/chi tiết.
+```mermaid
+graph TD
+    Page[TRANG WEB / PHÂN HỆ ĐƯỢC KIỂM THỬ]
+    
+    subgraph T1[TẦNG 1: QUÉT TỪNG TÍNH NĂNG CON]
+        F1["Tính năng 1: Tìm kiếm & Lọc<br>• 1 Happy Case<br>• Nhiều Worst Cases (Empty, Overflow, SQLi)"]
+        F2["Tính năng 2: Thêm mới / Form Tạo<br>• 1 Happy Case<br>• Nhiều Worst Cases (Form rỗng, Duplicate, Hủy form)"]
+        F3["Tính năng 3: Chỉnh sửa & Cập nhật<br>• 1 Happy Case<br>• Nhiều Worst Cases (Xóa rỗng, Hủy sửa)"]
+        F4["Tính năng 4: Xem chi tiết & Drawer<br>• 1 Happy Case<br>• Nhiều Worst Cases (Đóng ESC, Backdrop)"]
+        F5["Tính năng 5: Xóa bản ghi<br>• 1 Happy Case<br>• Nhiều Worst Cases (Hủy popup xóa)"]
+        F6["Tính năng 6: Phân trang & Số dòng/trang<br>• 1 Happy Case<br>• Nhiều Worst Cases (Đổi page size, Đổi ở trang cuối)"]
+    end
+    
+    subgraph T2[TẦNG 2: CHỐT HẠ BẰNG GRAND JOURNEY CUJs]
+        Master1["Grand CUJ 1: Vòng đời Nghiệp vụ Toàn vẹn (15 - 20 bước)<br>Tạo -> Tìm -> Xem -> Sửa -> Phân trang -> Hủy xóa -> Xóa thật -> Rỗng"]
+        Master2["Grand CUJ 2: Điều hướng Liên Phân hệ (12 - 16 bước)<br>Tổ chức -> Cơ sở -> Nhân sự -> Tổ chức (Chống kẹt state)"]
+    end
 
-2. **NHIỀU Test Cases Worst-Case & UX-Breaking (Bao phủ mọi rủi ro)**:
-   - `TC_WC_AUTH_...`: Thử nghiệm bypass bảo mật, truy cập trái phép hoặc SQLi/XSS trên form đăng nhập/tìm kiếm.
-   - `TC_WC_FORM_BLANK_...`: Gửi form hoàn toàn rỗng để kiểm tra đồng thời toàn bộ validation viền đỏ và thông báo lỗi.
-   - `TC_WC_DATA_EXTREME_...`: Nhập chuỗi siêu dài (500+ ký tự) hoặc ký tự đặc biệt Regex (`.*`, `[`, `\`) để kiểm tra chống vỡ layout ngang (No CSS overflow).
-   - `TC_WC_DATA_WHITESPACE_...`: Nhập khoảng trắng thừa ở 2 đầu chuỗi (`"   Text   "`) để kiểm tra auto-trimming.
-   - `TC_WC_GRID_EMPTY_...`: Tìm kiếm từ khóa vô nghĩa để kiểm tra hiển thị Empty State ("Không tìm thấy dữ liệu").
-   - `TC_WC_TAB_RACE_...`: Bấm chuyển đổi liên tục giữa các Tab phân loại để kiểm tra chống lỗi bất đồng bộ (Race condition).
-   - `TC_WC_MODAL_CANCEL_...`: Nhập dữ liệu dở dang rồi Hủy/Đóng modal $\rightarrow$ Mở lại để kiểm tra form được reset sạch sẽ.
-   - `TC_WC_DELETE_CANCEL_...`: Bấm Xóa $\rightarrow$ Hủy xác nhận để kiểm tra bản ghi vẫn còn nguyên vẹn.
+    Page --> T1
+    T1 --> T2
+```
 
-3. **Quy ước đặt mã TestCaseId**:
-   - `TC_01_<Tên Chức Năng>_Happy_Path`
-   - `TC_WC_01_Bao_Mat_...`
-   - `TC_WC_02_Form_Rong_...`
-   - `TC_WC_03_Chuoi_Sieu_Dai_...`
-   - `TC_WC_04_Tim_Kiem_Empty_State_...`
-   - `TC_WC_05_Chuyen_Tab_Nhanh_...`
+---
 
-4. **Quy tắc Assertion An Toàn**:
-   - Mọi test case Worst-case phải kiểm tra chính xác thông báo lỗi hiển thị (`text_visible`), thuộc tính viền đỏ hoặc URL redirect (`url_contains` / `url_not_contains`).
-   - Tuyệt đối không để test case kết thúc mà thiếu bước kiểm tra (`check`).
+### 1. Chi Tiết Tầng 1: Ma Trận 1 Happy + Nhiều Worst-Case Cho Từng Tính Năng
+
+| Tính năng | 1 Happy Path Case | Nhiều Worst-Case & Boundary Cases |
+| :--- | :--- | :--- |
+| **1. Tìm kiếm & Lọc** | Nhập từ khóa chuẩn $\rightarrow$ Trả về đúng bản ghi | • **Empty State**: Tìm từ khóa vô nghĩa $\rightarrow$ Báo "Không tìm thấy dữ liệu".<br>• **Buffer Overflow**: Chuỗi 500+ ký tự, Emojis $\rightarrow$ Chống vỡ layout ngang.<br>• **Security Injection**: SQLi (`' OR '1'='1`) & XSS $\rightarrow$ Chặn an toàn, không lỗi 500.<br>• **Reset Filter**: Xóa trắng ô tìm kiếm $\rightarrow$ Khôi phục toàn bộ danh sách. |
+| **2. Thêm mới / Form** | Điền thông tin chuẩn $\rightarrow$ Lưu $\rightarrow$ Hiển thị thành công | • **Blank Form**: Bấm Lưu khi để trống toàn bộ $\rightarrow$ Tất cả trường bắt buộc viền đỏ và báo lỗi.<br>• **Duplicate Code**: Nhập trùng mã đã có $\rightarrow$ Báo lỗi trùng mã định danh.<br>• **Form Abandonment**: Điền dở dang rồi bấm Hủy $\rightarrow$ Mở lại kiểm tra form sạch 100%.<br>• **Invalid Format**: Số điện thoại có chữ, email thiếu `@` $\rightarrow$ Chặn submit. |
+| **3. Chỉnh sửa** | Mở form sửa $\rightarrow$ Đổi tên mới $\rightarrow$ Lưu $\rightarrow$ Bảng cập nhật đúng | • **Xóa rỗng trường bắt buộc**: Xóa sạch ô bắt buộc rồi bấm Lưu $\rightarrow$ Báo lỗi không cho lưu.<br>• **Hủy sửa**: Nhập tên mới rồi bấm Hủy $\rightarrow$ Dữ liệu cũ giữ nguyên vẹn. |
+| **4. Xem chi tiết** | Bấm xem chi tiết $\rightarrow$ Modal hiển thị đúng $\rightarrow$ Đóng | • **Phím Escape & Click ngoài**: Bấm ESC hoặc click ra backdrop $\rightarrow$ Modal đóng mượt mà, không treo. |
+| **5. Xóa bản ghi** | Bấm Xóa $\rightarrow$ Xác nhận xóa $\rightarrow$ Bản ghi bị xóa dứt điểm | • **Hủy xác nhận xóa**: Bấm Xóa $\rightarrow$ Bấm "Hủy" trên popup $\rightarrow$ Bản ghi VẪN CÒN NGUYÊN VẸN. |
+| **6. Phân trang** | Bấm chuyển sang trang 2, trang 3 $\rightarrow$ Tải đúng dữ liệu | • **Đổi Số dòng/trang**: Đổi 10 lên 20/50 dòng $\rightarrow$ Bảng gom dữ liệu và cập nhật số trang.<br>• **Page Reset**: Đang ở trang cuối, đổi số dòng/trang $\rightarrow$ Tự động reset về trang 1. |
+
+---
+
+### 2. Chi Tiết Tầng 2: Chốt Hạ Bằng Các Grand Journey CUJs Liên Hoàn
+
+Sau khi đã kiểm thử độc lập từng tính năng, Planner **BẮT BUỘC chốt hạ bằng 01 - 02 Test Cases chuỗi hành động dài (Grand Journey)** để đảm bảo khi các tính năng phối hợp với nhau không gây ra lỗi ngầm hay xung đột trạng thái:
+
+- **`TC_GRAND_E2E_01_Lifecycle_Master` (15 - 20 bước liên hoàn)**:
+  - Đăng nhập $\rightarrow$ Điều hướng phân hệ $\rightarrow$ Thêm mới bản ghi $\rightarrow$ Tìm kiếm theo mã vừa tạo $\rightarrow$ Xem chi tiết $\rightarrow$ Chỉnh sửa tên $\rightarrow$ Thay đổi số dòng hiển thị $\rightarrow$ Bấm nút Xóa & chọn "Hủy" $\rightarrow$ Bấm nút Xóa & chọn "Xác nhận xóa" $\rightarrow$ Tìm kiếm lại để xác nhận danh sách sạch rỗng.
+- **`TC_GRAND_E2E_02_Cross_Module_Navigation` (12 - 16 bước liên hoàn)**:
+  - Điều hướng qua lại giữa các menu phân hệ (Tổ chức $\rightarrow$ Cơ sở $\rightarrow$ Nhân sự $\rightarrow$ Tổ chức) $\rightarrow$ Kiểm tra router SPA chuyển đổi ổn định, không bị kẹt bộ lọc hoặc mất phiên đăng nhập.
+
+---
+
+# IV. BỘ TIÊU CHÍ ĐÁNH GIÁ ĐỘ SẴN SÀNG THEO CHUẨN DEVIQA "STRANGER TEST"
+
+Để đảm bảo bộ test case đạt chất lượng cấp doanh nghiệp (Enterprise Grade), kịch bản Planner sinh ra phải vượt qua 5 câu hỏi kiểm định:
+
+1. **Tính Tự Chứa (Self-Containment)**: Kịch bản có chứa đầy đủ URL, tài khoản đăng nhập, giá trị nhập liệu và kỳ vọng rõ ràng không?
+2. **Khả Năng Thực Thi Độc Lập (Isolation)**: Mỗi test case có điều kiện tiên quyết (`preconditions`) và dọn dẹp (`postconditions`) để có thể chạy độc lập theo bất kỳ thứ tự nào không?
+3. **Độ Bền Vững của Bộ Chọn (Locator Resilience)**: Các bước tương tác có dựa trên hành vi người dùng và Accessible Roles (`tab`, `button`, `link`, `textbox`) thay vì ID ngẫu nhiên không?
+4. **Bao Phủ Rủi Ro Nghiệp Vụ (Risk-Based Coverage)**: Kịch bản có kiểm thử đầy đủ các tình huống lỗi, nhập rỗng, ký tự đặc biệt, SQLi/XSS, và phân trang không?
+5. **Tính Rõ Ràng Cho Người Lạ (Stranger Test Passing)**: Bất kỳ QA nào mới vào dự án có thể đọc bảng test case và hiểu 100% kết quả mong đợi mà không cần hỏi lại developer không?
+
+---
+
+# V. HƯỚNG DẪN XỬ LÝ & TRIỆT TIÊU LỖI FLAKY (CHẬP CHỜN) TRONG TEST AUTOMATION
+
+Khi phân tích kịch bản và thiết kế bước kiểm thử, Planner cần trang bị tư duy phòng ngừa 4 nhóm nguyên nhân Flaky phổ biến:
+
+1. **SPA Render Lag**: Trang web tải khung HTML xong nhưng React/Vue JS bundle chưa mount ô input.
+   → **Khắc phục**: Ghi rõ target tường minh để Generator sinh `waitFor({ state: 'visible', timeout: 15000 })`.
+2. **Backdrop / Sheet Overlay**: Màng mờ Drawer đè lên nút ở background khiến Playwright báo lỗi `intercepts pointer events`.
+   → **Khắc phục**: Sử dụng Accessible Name ngữ nghĩa, bấm đúng nút trong Drawer thay vì nút kích hoạt background.
+3. **Data Pollution & Leftover State**: Bản ghi tạo từ lần chạy trước chưa xóa làm lần chạy sau bị lỗi *"Đã tồn tại"*.
+   → **Khắc phục**: Đặt dữ liệu động `TC_ORG_${Date.now()}` và luôn định nghĩa `postconditions` dọn dẹp bản ghi.
+4. **Unsettled Navigation**: Bấm nút nhưng router chưa chuyển trang đã vội vàng click menu.
+   → **Khắc phục**: Luôn có bước `check` xác nhận chuyển trang (`waitForURL`) giữa các phân hệ.
+
+---
+
+# VI. TÔN CHỈ KỸ NGHỆ: "TESTCASE CÀNG CẬN BIÊN THÌ TRANG WEB CÀNG AN TOÀN"
+
+Một kỹ sư QA giỏi không dừng lại ở việc chứng minh phần mềm hoạt động trong điều kiện lý tưởng. Nhiệm vụ tối thượng là **chứng minh phần mềm không thể bị đánh sập trong những điều kiện khắc nghiệt nhất**:
+
+1. **Chuỗi hành động sâu (Deep Action Chains)**: Thiết kế test case liền mạch 10 - 15 bước (Tạo -> Tìm -> Xem -> Sửa -> Hủy xóa -> Xóa -> Kiểm tra rỗng).
+2. **Thử thách Vùng biên (Boundary Stress)**:
+   - Chuỗi độ dài cực hạn (500+ ký tự) chống vỡ layout CSS.
+   - Ký tự đặc biệt Unicode / Emojis / Tiếng Việt có dấu phức tạp.
+   - Thử nghiệm Payload SQLi & XSS trên tất cả các ô nhập liệu.
+3. **Kiểm soát Trạng thái & Tính Toàn Vẹn (State Integrity)**:
+   - Luôn kiểm tra tính năng "Hủy" (Cancel) ở các form nhập và popup xóa trước khi thực hiện hành động phá hủy thật.
+   - Kiểm tra khả năng phục hồi dữ liệu khi xóa bộ lọc hoặc đổi số dòng/trang.
